@@ -9,8 +9,8 @@ from agent.config import config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="agent",
-        description="A coding agent that reads/writes files and executes commands.",
+        prog="megumin",
+        description="Megumin - A coding agent that reads/writes files and executes commands.",
     )
     parser.add_argument(
         "--workspace", "-w",
@@ -80,7 +80,7 @@ def main() -> None:
     history = History(system_prompt)
     ui = UI(stream=not config.no_stream)
 
-    ui.info(f"Coding Agent | model: {config.model} | workspace: {workspace.root}")
+    ui.info(f"🔥 Megumin | model: {config.model} | workspace: {workspace.root}")
     ui.info("Type your request, or 'exit' / Ctrl+D to quit.\n")
 
     # One-shot mode
