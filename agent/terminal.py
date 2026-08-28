@@ -72,7 +72,7 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        sys.stdout.write(f"{GREEN}{line}{RESET}\n")
+        sys.stdout.write(f"{GREEN}{line}{RESET}\n\n")
         sys.stdout.flush()
 
         return user_input.strip()
