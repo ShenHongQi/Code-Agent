@@ -292,13 +292,15 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
     selected = 0
     total = len(items)
 
-    # 截断选项到终端宽度，防止换行导致光标定位错误
+    # 确保每个选项只占一行：去掉换行 + 截断到终端宽度
     cols = shutil.get_terminal_size().columns
     max_item_width = cols - 6  # 留出 "  ❯ " 前缀宽度
-    display_items = [
-        item[:max_item_width] + ("…" if len(item) > max_item_width else "")
-        for item in items
-    ]
+    display_items = []
+    for item in items:
+        clean = item.replace("\n", " ").replace("\r", "")
+        if len(clean) > max_item_width:
+            clean = clean[:max_item_width] + "…"
+        display_items.append(clean)
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)

@@ -95,12 +95,12 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
         ctx.ui.warning("当前工作区没有历史会话。")
         return
 
-    # 格式化选项
+    # 格式化选项（清除换行，避免菜单渲染错乱）
     items = []
     for s in sessions:
         updated = s.get("updated_at", "")[:16].replace("T", " ")
         turns = s.get("turns", 0)
-        summary = s.get("summary", "")[:50]
+        summary = s.get("summary", "").replace("\n", " ").strip()[:50]
         items.append(f"{updated}  {turns}轮  {summary}")
 
     idx = select_menu(items, title="选择要恢复的会话:")
