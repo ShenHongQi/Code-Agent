@@ -160,6 +160,15 @@ def run_loop(
 
         # Check natural stop
         if acc.is_natural_stop:
+            # 纠偏：如果 assistant 只输出文本且包含代码块/命令，提醒它调用工具
+            if acc.content and _looks_like_missed_tool_call(acc.content) and iteration < max_iter - 1:
+                nudge = (
+                    "[System] 你刚才描述了要执行的操作但没有调用工具。"
+                    "请不要只描述命令——直接调用 bash/write_file/edit_file 等工具来执行。"
+                    "现在请调用相应的工具完成任务。"
+                )
+                history.append(make_user(nudge))
+                continue
             return LoopResult("natural_stop", iteration)
 
         # Process tool calls
@@ -176,6 +185,18 @@ def run_loop(
                 history.seal_pending_tool_calls()
 
     return LoopResult("max_iterations", iteration)
+
+
+def _looks_like_missed_tool_call(content: str) -> bool:
+    """检测 assistant 是否在文本中描述了命令而没有调用工具。"""
+    import re
+    indicators = [
+        bool(re.search(r"```(bash|shell|sh)\n", content)),
+        bool(re.search(r"```\n(mkdir|cd|npm|pip|git|python|curl|wget)\s", content)),
+        bool(re.search(r"我将执行|让我[们来]|接下来我会|我会运行", content)),
+        bool(re.search(r"执行以下命令|运行以下", content)),
+    ]
+    return sum(indicators) >= 1
 
 
 def _detect_stuck(history: History) -> bool:
