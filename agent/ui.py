@@ -13,8 +13,8 @@ from agent.markdown import StreamingMarkdownRenderer, render_markdown
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-ORANGE = "\033[38;5;208m"
-RED_ORANGE = "\033[38;5;202m"
+ORANGE = "\033[38;5;196m"
+RED_ORANGE = "\033[38;5;160m"
 YELLOW = "\033[33m"
 RED = "\033[31m"
 GREEN = "\033[32m"
@@ -206,6 +206,46 @@ class UI:
         sys.stdout.write(f"    {color}{icon} {first_line}{RESET}\n")
         sys.stdout.flush()
         self._status.start("Assistant", "thinking")
+
+    # ─── 会话重放 ─────────────────────────────────────────────────────
+
+    def replay_history(self, messages: list[dict]) -> None:
+        """DIM 样式重放历史消息到终端。"""
+        sys.stdout.write(f"\n{DIM}{'─' * 50}\n")
+        sys.stdout.write(f"  ⏪ 恢复会话历史\n")
+        sys.stdout.write(f"{'─' * 50}{RESET}\n\n")
+
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content", "")
+
+            if role == "system":
+                continue
+            elif role == "user":
+                # 截断到第一行
+                first_line = content.split("\n")[0][:80]
+                sys.stdout.write(f"{DIM}{ORANGE}> {first_line}{RESET}\n")
+            elif role == "assistant":
+                if content:
+                    lines = content.strip().split("\n")
+                    preview = lines[0][:100]
+                    sys.stdout.write(f"{DIM}● {preview}")
+                    if len(lines) > 1:
+                        sys.stdout.write(f" (+{len(lines) - 1} lines)")
+                    sys.stdout.write(f"{RESET}\n")
+                # 显示工具调用
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
+                    func = tc.get("function", {})
+                    name = func.get("name", "?")
+                    sys.stdout.write(f"{DIM}  ⏺ {name}(...){RESET}\n")
+            elif role == "tool":
+                continue  # 不显示工具结果详情
+
+        sys.stdout.write(f"\n{DIM}{'─' * 50}\n")
+        sys.stdout.write(f"  ✅ 已恢复 ({len(messages)} 条消息)\n")
+        sys.stdout.write(f"{'─' * 50}{RESET}\n\n")
+        sys.stdout.flush()
 
     # ─── 通用消息 ─────────────────────────────────────────────────────
 

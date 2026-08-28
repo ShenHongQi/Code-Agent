@@ -31,11 +31,6 @@ def parse_args() -> argparse.Namespace:
         help="Force a context token limit (for testing compaction)",
     )
     parser.add_argument(
-        "--new-session",
-        action="store_true",
-        help="Force a new session (skip recovery prompt)",
-    )
-    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt (if not given, enters interactive mode)",
@@ -95,38 +90,19 @@ def _first_run_setup() -> None:
     print()
 
 
-def _try_resume_session(session_mgr, workspace_root: str, system_prompt: str):
-    """尝试恢复上次会话，返回 (History, session_meta) 或 (None, None)。"""
-    from agent.history import History
+def _new_session_meta(workspace: str) -> dict:
+    """创建新会话的 meta。"""
+    from agent.session import SessionManager
+    from datetime import datetime, timezone
 
-    meta = session_mgr.latest_for_workspace(workspace_root)
-    if not meta:
-        return None, None
-
-    updated = meta.get("updated_at", "")[:16].replace("T", " ")
-    turns = meta.get("turns", 0)
-    summary = meta.get("summary", "")[:80]
-
-    print(f"  检测到上次会话 ({updated}, {turns} 轮)")
-    if summary:
-        print(f"  摘要: {summary}")
-    print()
-
-    try:
-        choice = input("  [r] 恢复上次会话  [n] 新建  > ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        choice = "n"
-
-    if choice == "r":
-        try:
-            messages, loaded_meta = session_mgr.load(meta["session_id"])
-            history = History.from_serializable(system_prompt, messages)
-            print(f"  ✅ 已恢复 {len(messages)} 条消息\n")
-            return history, loaded_meta
-        except (OSError, KeyError, ValueError) as e:
-            print(f"  ⚠ 恢复失败: {e}，启动新会话\n")
-
-    return None, None
+    return {
+        "session_id": SessionManager.create_session_id(workspace),
+        "workspace": workspace,
+        "model": config.model,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "turns": 0,
+        "summary": "",
+    }
 
 
 def main() -> None:
@@ -156,17 +132,17 @@ def main() -> None:
 
     # Initialize subsystems
     from agent.workspace import Workspace, FileRegistry
-    from agent.tools import fs, search, bash, todo, task  # noqa: F401 - register tools
-    from agent.tools import memory as memory_tool  # noqa: F401 - register memory tools
-    from agent.tools import diff, proc, web, control  # noqa: F401 - register new tools
+    from agent.tools import fs, search, bash, todo, task  # noqa: F401
+    from agent.tools import memory as memory_tool  # noqa: F401
+    from agent.tools import diff, proc, web, control  # noqa: F401
     from agent.llm import create_provider
     from agent.history import History
     from agent.prompts import build_system_prompt
     from agent.memory import MemoryManager
     from agent.session import SessionManager
     from agent.ui import UI
-    from agent.loop import run_loop
     from agent.terminal import InputManager, EscDetector, EscInterrupt
+    from agent.commands import CommandContext, dispatch as cmd_dispatch
 
     workspace = Workspace(config.workspace)
     registry = FileRegistry()
@@ -208,28 +184,9 @@ def main() -> None:
     from agent.banner import render_banner
     print(render_banner(model=config.model, workspace=str(workspace.root)))
 
-    # Session recovery
-    history = None
-    session_meta = None
-
-    if not args.new_session:
-        history, session_meta = _try_resume_session(
-            session_mgr, str(workspace.root), system_prompt
-        )
-
-    if history is None:
-        history = History(system_prompt)
-        session_id = SessionManager.create_session_id(str(workspace.root))
-        session_meta = {
-            "session_id": session_id,
-            "workspace": str(workspace.root),
-            "model": config.model,
-            "created_at": __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat(),
-            "turns": 0,
-            "summary": "",
-        }
+    # 默认新建会话（不做恢复提示）
+    history = History(system_prompt)
+    session_meta = _new_session_meta(str(workspace.root))
 
     # One-shot mode
     initial_prompt = " ".join(args.prompt) if args.prompt else None
@@ -261,9 +218,24 @@ def main() -> None:
             input_mgr.save_history()
             break
 
-        # /think 命令：展开上一轮的中间思考
-        if user_input.lower() in ("/think", "/thinking"):
-            ui.show_full_thinking(thinking_history)
+        # 斜杠命令分发
+        if user_input.startswith("/"):
+            ctx = CommandContext(
+                ui=ui,
+                history=history,
+                session_mgr=session_mgr,
+                session_meta=session_meta,
+                workspace=str(workspace.root),
+                thinking_history=thinking_history,
+                input_mgr=input_mgr,
+                provider=provider,
+                memory_mgr=memory_mgr,
+            )
+            cmd_dispatch(user_input, ctx)
+
+            # /resume 可能替换了 history 和 session_meta
+            if ctx._resume_result is not None:
+                history, session_meta = ctx._resume_result
             continue
 
         # 新一轮对话：清空思考记录
@@ -321,7 +293,6 @@ def _save_session(session_mgr, history, meta: dict) -> None:
     """保存当前会话到磁盘。"""
     try:
         messages = history.to_serializable()
-        # 生成简短摘要用于恢复提示
         if messages:
             last_assistant = ""
             for msg in reversed(messages):

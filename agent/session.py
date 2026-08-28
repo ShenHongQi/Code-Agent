@@ -47,6 +47,11 @@ class SessionManager:
 
     def latest_for_workspace(self, workspace: str) -> dict[str, Any] | None:
         """查找该 workspace 最近的会话 meta，无则返回 None。"""
+        all_sessions = self.list_for_workspace(workspace)
+        return all_sessions[0] if all_sessions else None
+
+    def list_for_workspace(self, workspace: str) -> list[dict[str, Any]]:
+        """返回该 workspace 所有会话 meta，按 updated_at 降序。"""
         ws_hash = self._workspace_hash(workspace)
         candidates: list[tuple[str, dict]] = []
 
@@ -58,11 +63,8 @@ class SessionManager:
             except (json.JSONDecodeError, OSError):
                 continue
 
-        if not candidates:
-            return None
-
         candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
+        return [m for _, m in candidates]
 
     def cleanup(self) -> None:
         """只保留最近 MAX_SESSIONS 个会话文件。"""

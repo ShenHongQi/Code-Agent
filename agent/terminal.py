@@ -15,8 +15,8 @@ HISTORY_SIZE = 1000
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-ORANGE = "\033[38;5;208m"
-RED_ORANGE = "\033[38;5;202m"
+ORANGE = "\033[38;5;196m"
+RED_ORANGE = "\033[38;5;160m"
 YELLOW = "\033[33m"
 
 
@@ -258,3 +258,90 @@ class EscDetector:
                         # 裸 ESC
                         self.event.set()
                         break
+
+
+# ─── InteractiveSelector ────────────────────────────────────────────────────
+
+def select_menu(items: list[str], title: str = "选择:") -> int | None:
+    """交互式上下键选择菜单。返回选中索引，ESC/q 取消返回 None。
+
+    需要 Unix TTY 环境（termios）。
+    """
+    if not items:
+        return None
+
+    if not sys.stdin.isatty() or os.name == "nt":
+        # 非 TTY 回退：简单数字选择
+        sys.stdout.write(f"{BOLD}{title}{RESET}\n")
+        for i, item in enumerate(items):
+            sys.stdout.write(f"  {i + 1}. {item}\n")
+        sys.stdout.write(f"{DIM}输入序号 (ESC 取消): {RESET}")
+        sys.stdout.flush()
+        try:
+            choice = input().strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(items):
+                return idx
+        except (ValueError, EOFError, KeyboardInterrupt):
+            pass
+        return None
+
+    import termios
+    import tty
+
+    selected = 0
+    total = len(items)
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    def _render():
+        # 清除之前渲染的行，重绘
+        sys.stdout.write(f"\033[{total + 1}A")  # 移到标题行
+        sys.stdout.write(f"\033[J")  # 清除到底部
+        sys.stdout.write(f"{BOLD}{title}{RESET}\n")
+        for i, item in enumerate(items):
+            if i == selected:
+                sys.stdout.write(f"  {BOLD}{ORANGE}❯ {item}{RESET}\n")
+            else:
+                sys.stdout.write(f"  {DIM}  {item}{RESET}\n")
+        sys.stdout.flush()
+
+    try:
+        tty.setcbreak(fd)
+
+        # 首次渲染
+        sys.stdout.write(f"{BOLD}{title}{RESET}\n")
+        for i, item in enumerate(items):
+            if i == selected:
+                sys.stdout.write(f"  {BOLD}{ORANGE}❯ {item}{RESET}\n")
+            else:
+                sys.stdout.write(f"  {DIM}  {item}{RESET}\n")
+        sys.stdout.flush()
+
+        while True:
+            ch = sys.stdin.read(1)
+
+            if ch == "\x1b":
+                # 读取转义序列
+                seq = sys.stdin.read(2)
+                if seq == "[A":  # 上
+                    selected = (selected - 1) % total
+                    _render()
+                elif seq == "[B":  # 下
+                    selected = (selected + 1) % total
+                    _render()
+                elif seq == "" or seq[0] != "[":
+                    # 裸 ESC
+                    return None
+            elif ch in ("\r", "\n"):  # Enter
+                return selected
+            elif ch in ("q", "Q"):
+                return None
+            elif ch == "\x03":  # Ctrl+C
+                return None
+
+    except (termios.error, OSError, KeyboardInterrupt):
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
