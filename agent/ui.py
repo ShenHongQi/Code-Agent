@@ -198,7 +198,6 @@ class UI:
         args_summary = self._sanitize(args_summary)
         sys.stdout.write(f"\n  {DIM}⏺ {name}({args_summary}){RESET}\n")
         sys.stdout.flush()
-        self._status.start("Assistant", "tool")
 
     def tool_result(self, ok: bool, summary: str) -> None:
         self._status.stop()
