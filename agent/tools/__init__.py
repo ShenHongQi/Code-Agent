@@ -105,10 +105,12 @@ def get_registry() -> dict[str, ToolDef]:
     return _REGISTRY
 
 
-def get_tools_schema() -> list[dict[str, Any]]:
-    """生成供 API 使用的 tools 参数。"""
+def get_tools_schema(allowed: set[str] | None = None) -> list[dict[str, Any]]:
+    """生成供 API 使用的 tools 参数。allowed 为 None 时返回全部。"""
     result = []
     for td in _REGISTRY.values():
+        if allowed is not None and td.name not in allowed:
+            continue
         result.append({
             "type": "function",
             "function": {

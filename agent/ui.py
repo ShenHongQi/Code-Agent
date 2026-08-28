@@ -1,6 +1,7 @@
-"""ANSI 流式渲染：终端 UI。"""
+"""ANSI 流式渲染：终端 UI + 脱敏过滤。"""
 
 from __future__ import annotations
+import os
 import sys
 
 
@@ -15,10 +16,27 @@ RED = "\033[31m"
 MAGENTA = "\033[35m"
 
 
+def _build_redact_patterns() -> list[str]:
+    """收集环境变量中可能是密钥的值，用于输出脱敏。"""
+    patterns = []
+    key = os.environ.get("AGENT_API_KEY", "")
+    if key and len(key) >= 8:
+        patterns.append(key)
+    return patterns
+
+
 class UI:
     def __init__(self, stream: bool = True):
         self._stream = stream
         self._in_stream = False
+        self._redact_patterns = _build_redact_patterns()
+
+    def _sanitize(self, text: str) -> str:
+        """替换输出中的敏感信息。"""
+        for pattern in self._redact_patterns:
+            if pattern in text:
+                text = text.replace(pattern, "[REDACTED]")
+        return text
 
     def user_prompt(self) -> None:
         sys.stdout.write(f"\n{BOLD}{GREEN}> {RESET}")
@@ -31,26 +49,26 @@ class UI:
 
     def stream_token(self, token: str) -> None:
         if self._stream:
-            sys.stdout.write(token)
+            sys.stdout.write(self._sanitize(token))
             sys.stdout.flush()
 
     def assistant_end(self, content: str) -> None:
         if self._in_stream:
             if not self._stream and content:
-                sys.stdout.write(content)
+                sys.stdout.write(self._sanitize(content))
             sys.stdout.write("\n")
             sys.stdout.flush()
             self._in_stream = False
 
     def tool_start(self, name: str, args_summary: str) -> None:
+        args_summary = self._sanitize(args_summary)
         sys.stdout.write(f"\n  {DIM}⏺ {name}({args_summary}){RESET}\n")
         sys.stdout.flush()
 
     def tool_result(self, ok: bool, summary: str) -> None:
         color = GREEN if ok else RED
         icon = "⎿" if ok else "✗"
-        # Show first line as summary
-        first_line = summary.split("\n")[0][:120]
+        first_line = self._sanitize(summary.split("\n")[0][:120])
         sys.stdout.write(f"    {color}{icon} {first_line}{RESET}\n")
         sys.stdout.flush()
 

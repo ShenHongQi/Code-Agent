@@ -62,7 +62,7 @@ def main() -> None:
     from agent.tools import fs, search, bash, todo, task  # noqa: F401 - register tools
     from agent.llm import create_provider
     from agent.history import History
-    from agent.prompts import SYSTEM_PROMPT
+    from agent.prompts import build_system_prompt
     from agent.ui import UI
     from agent.loop import run_loop
 
@@ -76,7 +76,8 @@ def main() -> None:
     provider = create_provider()
     task.init(workspace, provider, depth=0)
 
-    history = History(SYSTEM_PROMPT)
+    system_prompt = build_system_prompt(str(workspace.root))
+    history = History(system_prompt)
     ui = UI(stream=not config.no_stream)
 
     ui.info(f"Coding Agent | model: {config.model} | workspace: {workspace.root}")

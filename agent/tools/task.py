@@ -40,21 +40,13 @@ def task(description: str) -> ToolResult:
 
     assert _workspace and _provider
 
-    from agent.history import History
+    from agent.history import History, make_user
     from agent.prompts import SUBAGENT_PROMPT
-    from agent.loop import run_loop
+    from agent.loop import run_loop, SUBAGENT_TOOLS
     from agent.ui import UI
-    from agent.tools import get_tools_schema
-    from agent.workspace import Workspace, FileRegistry
-    from agent.tools import fs as fs_mod, search as search_mod, bash as bash_mod
 
-    # Create isolated sub-agent with read-only tools
     sub_history = History(SUBAGENT_PROMPT)
     sub_ui = UI(stream=True)
-
-    # The sub-agent runs in the same workspace but with limited tools
-    # We run it synchronously
-    from agent.history import make_user
     sub_history.append(make_user(description))
 
     _active_count += 1
@@ -65,6 +57,7 @@ def task(description: str) -> ToolResult:
             _provider,
             sub_ui,
             max_iterations=SUBAGENT_MAX_ITERATIONS,
+            allowed_tools=SUBAGENT_TOOLS,
         )
     finally:
         _active_count -= 1

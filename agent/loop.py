@@ -8,7 +8,7 @@ from agent.context import ContextManager
 from agent.history import History, make_user, make_tool
 from agent.llm import Provider, stream_with_retry, LLMError, ContextLengthExceeded
 from agent.stream import StreamAccumulator
-from agent.tools import get_tools_schema, dispatch
+from agent.tools import get_tools_schema, dispatch, ToolResult
 from agent.ui import UI
 
 
@@ -20,16 +20,20 @@ class LoopResult:
         self.iterations = iterations
 
 
+SUBAGENT_TOOLS = {"read_file", "glob", "grep", "bash"}
+
+
 def run_loop(
     history: History,
     provider: Provider,
     ui: UI,
     max_iterations: int | None = None,
     context_mgr: ContextManager | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> LoopResult:
     """执行 agent loop 直到终止条件满足。"""
     max_iter = max_iterations or config.max_iterations
-    tools_schema = get_tools_schema()
+    tools_schema = get_tools_schema(allowed_tools)
     ctx = context_mgr or ContextManager(provider)
     iteration = 0
 
@@ -61,6 +65,11 @@ def run_loop(
             ui.error(str(e))
             return LoopResult("fatal_error", iteration)
 
+        # Calibrate token estimator with actual usage
+        if acc.usage.get("prompt_tokens"):
+            estimated = ctx.estimator.estimate_messages(messages)
+            ctx.estimator.calibrate(estimated, acc.usage["prompt_tokens"])
+
         # Append assistant message to history
         assistant_msg = acc.to_message()
         history.append(assistant_msg)
@@ -77,11 +86,12 @@ def run_loop(
         # Process tool calls
         if acc.has_tool_calls:
             try:
-                _execute_tools(acc, history, ui)
+                _execute_tools(acc, history, ui, allowed_tools)
             except KeyboardInterrupt:
-                history.seal_pending_tool_calls()
                 ui.warning("\nInterrupted by user.")
                 return LoopResult("user_interrupt", iteration)
+            finally:
+                history.seal_pending_tool_calls()
 
     return LoopResult("max_iterations", iteration)
 
@@ -104,7 +114,9 @@ def _stream_step(
     return acc
 
 
-def _execute_tools(acc: StreamAccumulator, history: History, ui: UI) -> None:
+def _execute_tools(
+    acc: StreamAccumulator, history: History, ui: UI, allowed_tools: set[str] | None = None
+) -> None:
     """执行 assistant 消息中的所有 tool_calls。"""
     tool_calls = acc.get_tool_calls()
 
@@ -113,15 +125,16 @@ def _execute_tools(acc: StreamAccumulator, history: History, ui: UI) -> None:
         args = tc["arguments"]
         tc_id = tc["id"]
 
-        # UI: show tool invocation
-        args_summary = _summarize_args(name, args)
-        ui.tool_start(name, args_summary)
+        # Enforce tool restrictions (sub-agent read-only)
+        if allowed_tools is not None and name not in allowed_tools:
+            result = ToolResult(False, f"Error: Tool '{name}' is not available in this context (read-only).")
+        else:
+            # UI: show tool invocation
+            args_summary = _summarize_args(name, args)
+            ui.tool_start(name, args_summary)
+            result = dispatch(name, args)
 
-        # Dispatch
-        result = dispatch(name, args)
         ui.tool_result(result.ok, result.content)
-
-        # Append tool result to history
         history.append(make_tool(tc_id, result.content))
 
 
