@@ -58,10 +58,8 @@ class InputManager:
     def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示视觉化输入框并读取用户输入。"""
         width = shutil.get_terminal_size().columns
-        line = "─" * width
-
-        sys.stdout.write(f"\n{GREEN}{line}{RESET}\n")
-        sys.stdout.flush()
+        top = f"{GREEN}{'─' * width}{RESET}"
+        print(f"\n{top}")
 
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
@@ -72,10 +70,12 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        sys.stdout.write(f"{GREEN}{line}{RESET}\n")
+        # 底线：重新获取宽度（用户可能已调整窗口）
+        width = shutil.get_terminal_size().columns
+        bottom = f"{GREEN}{'─' * width}{RESET}"
+        print(bottom)
         if model:
-            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
-        sys.stdout.flush()
+            print(f"{DIM}  model: {model}{RESET}")
 
         return user_input.strip()
 
