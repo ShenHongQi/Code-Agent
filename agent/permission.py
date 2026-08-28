@@ -107,7 +107,8 @@ def check_permission(command: str, auto_approve: bool = False) -> None:
 
 
 def _ask_confirmation(command: str) -> None:
-    """交互式确认。"""
+    """交互式确认。需暂停 spinner 以免干扰输出。"""
+    # Pause spinner if active (avoid circular import by duck-typing)
     sys.stdout.write(f"\n\033[33m⚠ Command requires confirmation:\033[0m\n")
     sys.stdout.write(f"  {command}\n")
     sys.stdout.write(f"\033[33mAllow? [y/N]: \033[0m")

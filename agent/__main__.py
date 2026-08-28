@@ -106,7 +106,6 @@ def main() -> None:
     # 首次启动：交互式配置 API Key
     if not config.api_key:
         _first_run_setup()
-        # Reload config after setup
         from agent.config import Config
         new_cfg = Config()
         config.api_key = new_cfg.api_key
@@ -124,6 +123,7 @@ def main() -> None:
     from agent.prompts import build_system_prompt
     from agent.ui import UI
     from agent.loop import run_loop
+    from agent.terminal import InputManager, Spinner, EscDetector, EscInterrupt
 
     workspace = Workspace(config.workspace)
     registry = FileRegistry()
@@ -137,47 +137,65 @@ def main() -> None:
 
     system_prompt = build_system_prompt(str(workspace.root))
     history = History(system_prompt)
+
     ui = UI(stream=not config.no_stream)
+    spinner = Spinner()
+    ui.set_spinner(spinner)
+    input_mgr = InputManager()
 
     ui.info(f"🔥 Megumin | model: {config.model} | workspace: {workspace.root}")
-    ui.info("Type your request, or 'exit' / Ctrl+D to quit.\n")
+    ui.info("Type your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.\n")
 
     # One-shot mode
     initial_prompt = " ".join(args.prompt) if args.prompt else None
     if initial_prompt:
         _run_turn(initial_prompt, history, provider, ui)
+        input_mgr.save_history()
         return
 
     # Interactive REPL
+    prefill = ""
     while True:
         try:
-            ui.user_prompt()
-            user_input = input().strip()
+            user_input = input_mgr.styled_input(prefill=prefill)
+            prefill = ""
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
+            input_mgr.save_history()
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit", "/exit", "/quit"):
             print("Goodbye!")
+            input_mgr.save_history()
             break
 
-        _run_turn(user_input, history, provider, ui)
+        # Run with ESC detection
+        esc_detector = EscDetector()
+        esc_detector.start()
+        try:
+            _run_turn(user_input, history, provider, ui, esc_detector.event)
+        except EscInterrupt:
+            prefill = user_input
+            ui.warning("\n⚠ Interrupted (ESC). Edit and re-send.")
+        except KeyboardInterrupt:
+            history.seal_pending_tool_calls()
+            ui.warning("\nInterrupted.")
+        finally:
+            esc_detector.stop()
+
+    input_mgr.save_history()
 
 
-def _run_turn(user_input: str, history, provider, ui) -> None:
+def _run_turn(user_input: str, history, provider, ui, interrupt_event=None) -> None:
     from agent.history import make_user
     from agent.loop import run_loop
+    from agent.terminal import EscInterrupt
 
     history.append(make_user(user_input))
 
-    try:
-        result = run_loop(history, provider, ui)
-    except KeyboardInterrupt:
-        history.seal_pending_tool_calls()
-        ui.warning("\nInterrupted.")
-        return
+    result = run_loop(history, provider, ui, interrupt_event=interrupt_event)
 
     if result.reason == "max_iterations":
         ui.warning(f"\nReached iteration limit ({result.iterations}). You can continue the conversation.")

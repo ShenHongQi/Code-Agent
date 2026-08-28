@@ -1,4 +1,4 @@
-"""ANSI 流式渲染：终端 UI + 脱敏过滤。"""
+"""ANSI 流式渲染：终端 UI + 脱敏过滤 + Spinner 协调。"""
 
 from __future__ import annotations
 import os
@@ -29,7 +29,12 @@ class UI:
     def __init__(self, stream: bool = True):
         self._stream = stream
         self._in_stream = False
+        self._first_token = False
         self._redact_patterns = _build_redact_patterns()
+        self._spinner = None
+
+    def set_spinner(self, spinner) -> None:
+        self._spinner = spinner
 
     def _sanitize(self, text: str) -> str:
         """替换输出中的敏感信息。"""
@@ -46,13 +51,22 @@ class UI:
         sys.stdout.write(f"\n{BOLD}{CYAN}⏺ Assistant{RESET}\n")
         sys.stdout.flush()
         self._in_stream = True
+        self._first_token = True
+        if self._spinner:
+            self._spinner.start("Thinking...")
 
     def stream_token(self, token: str) -> None:
         if self._stream:
+            if self._first_token:
+                self._first_token = False
+                if self._spinner:
+                    self._spinner.pause()
             sys.stdout.write(self._sanitize(token))
             sys.stdout.flush()
 
     def assistant_end(self, content: str) -> None:
+        if self._spinner:
+            self._spinner.stop()
         if self._in_stream:
             if not self._stream and content:
                 sys.stdout.write(self._sanitize(content))
@@ -61,18 +75,28 @@ class UI:
             self._in_stream = False
 
     def tool_start(self, name: str, args_summary: str) -> None:
+        if self._spinner:
+            self._spinner.pause()
         args_summary = self._sanitize(args_summary)
         sys.stdout.write(f"\n  {DIM}⏺ {name}({args_summary}){RESET}\n")
         sys.stdout.flush()
+        if self._spinner:
+            self._spinner.resume(f"Running {name}...")
 
     def tool_result(self, ok: bool, summary: str) -> None:
+        if self._spinner:
+            self._spinner.pause()
         color = GREEN if ok else RED
         icon = "⎿" if ok else "✗"
         first_line = self._sanitize(summary.split("\n")[0][:120])
         sys.stdout.write(f"    {color}{icon} {first_line}{RESET}\n")
         sys.stdout.flush()
+        if self._spinner:
+            self._spinner.resume("Thinking...")
 
     def error(self, msg: str) -> None:
+        if self._spinner:
+            self._spinner.stop()
         sys.stdout.write(f"\n{RED}Error: {msg}{RESET}\n")
         sys.stdout.flush()
 
@@ -81,6 +105,8 @@ class UI:
         sys.stdout.flush()
 
     def warning(self, msg: str) -> None:
+        if self._spinner:
+            self._spinner.stop()
         sys.stdout.write(f"{YELLOW}{msg}{RESET}\n")
         sys.stdout.flush()
 

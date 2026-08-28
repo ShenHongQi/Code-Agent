@@ -1,6 +1,8 @@
 """Agent loop 与终止条件。"""
 
 from __future__ import annotations
+import sys
+import threading
 from typing import Any
 
 from agent.config import config
@@ -8,6 +10,7 @@ from agent.context import ContextManager
 from agent.history import History, make_user, make_tool
 from agent.llm import Provider, stream_with_retry, LLMError, ContextLengthExceeded
 from agent.stream import StreamAccumulator
+from agent.terminal import EscInterrupt
 from agent.tools import get_tools_schema, dispatch, ToolResult
 from agent.ui import UI
 
@@ -30,6 +33,7 @@ def run_loop(
     max_iterations: int | None = None,
     context_mgr: ContextManager | None = None,
     allowed_tools: set[str] | None = None,
+    interrupt_event: threading.Event | None = None,
 ) -> LoopResult:
     """执行 agent loop 直到终止条件满足。"""
     max_iter = max_iterations or config.max_iterations
@@ -39,6 +43,10 @@ def run_loop(
 
     while iteration < max_iter:
         iteration += 1
+
+        # Check ESC interrupt
+        if interrupt_event and interrupt_event.is_set():
+            raise EscInterrupt()
 
         messages = history.get_messages_for_api()
 
@@ -86,8 +94,11 @@ def run_loop(
         # Process tool calls
         if acc.has_tool_calls:
             try:
-                _execute_tools(acc, history, ui, allowed_tools)
-            except KeyboardInterrupt:
+                _execute_tools(acc, history, ui, allowed_tools, interrupt_event)
+            except (KeyboardInterrupt, EscInterrupt):
+                history.seal_pending_tool_calls()
+                if isinstance(sys.exc_info()[1], EscInterrupt):
+                    raise
                 ui.warning("\nInterrupted by user.")
                 return LoopResult("user_interrupt", iteration)
             finally:
@@ -115,12 +126,17 @@ def _stream_step(
 
 
 def _execute_tools(
-    acc: StreamAccumulator, history: History, ui: UI, allowed_tools: set[str] | None = None
+    acc: StreamAccumulator, history: History, ui: UI,
+    allowed_tools: set[str] | None = None,
+    interrupt_event: threading.Event | None = None,
 ) -> None:
     """执行 assistant 消息中的所有 tool_calls。"""
     tool_calls = acc.get_tool_calls()
 
     for tc in tool_calls:
+        if interrupt_event and interrupt_event.is_set():
+            raise EscInterrupt()
+
         name = tc["name"]
         args = tc["arguments"]
         tc_id = tc["id"]
