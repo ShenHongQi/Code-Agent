@@ -55,11 +55,10 @@ class InputManager:
         except (ImportError, OSError):
             self._readline = None
 
-    def styled_input(self, prefill: str = "", model: str = "") -> str:
+    def styled_input(self, prefill: str = "") -> str:
         """显示视觉化输入框并读取用户输入。"""
         width = shutil.get_terminal_size().columns
-        top = f"{GREEN}{'─' * width}{RESET}"
-        print(f"\n{top}")
+        print(f"\n{GREEN}{'─' * width}{RESET}")
 
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
@@ -70,14 +69,15 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        # 底线：重新获取宽度（用户可能已调整窗口）
+        return user_input.strip()
+
+    @staticmethod
+    def print_separator(model: str = "") -> None:
+        """打印底部分隔线和模型信息。"""
         width = shutil.get_terminal_size().columns
-        bottom = f"{GREEN}{'─' * width}{RESET}"
-        print(bottom)
+        print(f"{GREEN}{'─' * width}{RESET}")
         if model:
             print(f"{DIM}  model: {model}{RESET}")
-
-        return user_input.strip()
 
     def save_history(self) -> None:
         if self._readline_available:
