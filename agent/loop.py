@@ -129,14 +129,14 @@ def run_loop(
             messages = history.get_messages_for_api()
 
         try:
-            acc = _stream_step(provider, messages, tools_schema, ui)
+            acc = _stream_step_with_retry(provider, messages, tools_schema, ui)
         except ContextLengthExceeded:
             ui.warning("Context length exceeded. Forcing compaction...")
             compacted = ctx.compact(messages)
             history._messages = compacted[1:]
             messages = history.get_messages_for_api()
             try:
-                acc = _stream_step(provider, messages, tools_schema, ui)
+                acc = _stream_step_with_retry(provider, messages, tools_schema, ui)
             except (ContextLengthExceeded, LLMError) as e2:
                 ui.error(f"Still exceeding after compaction: {e2}")
                 return LoopResult("context_exhausted", iteration)
@@ -193,6 +193,31 @@ def _detect_stuck(history: History) -> bool:
             if checked >= STUCK_WINDOW:
                 break
     return recent_errors >= STUCK_WINDOW
+
+
+import random
+import time
+
+MAX_LLM_RETRIES = 5
+
+
+def _stream_step_with_retry(
+    provider: Provider,
+    messages: list[dict[str, Any]],
+    tools_schema: list[dict[str, Any]],
+    ui: UI,
+) -> StreamAccumulator:
+    """带重试的 LLM 调用。retryable 错误自动重试，非 retryable 立即抛出。"""
+    for attempt in range(MAX_LLM_RETRIES):
+        try:
+            return _stream_step(provider, messages, tools_schema, ui)
+        except LLMError as e:
+            if not e.retryable or attempt == MAX_LLM_RETRIES - 1:
+                raise
+            delay = random.uniform(0, min(30, 1.0 * 2 ** attempt))
+            ui.warning(f"  Retrying ({attempt + 1}/{MAX_LLM_RETRIES}) in {delay:.1f}s: {e}")
+            time.sleep(delay)
+    raise LLMError("Max retries exceeded", retryable=False)
 
 
 def _stream_step(
