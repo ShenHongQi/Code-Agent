@@ -158,6 +158,7 @@ def main() -> None:
     from agent.workspace import Workspace, FileRegistry
     from agent.tools import fs, search, bash, todo, task  # noqa: F401 - register tools
     from agent.tools import memory as memory_tool  # noqa: F401 - register memory tools
+    from agent.tools import diff, proc, web, control  # noqa: F401 - register new tools
     from agent.llm import create_provider
     from agent.history import History
     from agent.prompts import build_system_prompt
@@ -173,6 +174,8 @@ def main() -> None:
     fs.init(workspace, registry)
     search.init(workspace)
     bash.init(workspace)
+    diff.init(workspace, registry)
+    proc.init(workspace)
 
     # Memory system
     memory_mgr = MemoryManager(str(workspace.root))
@@ -183,6 +186,16 @@ def main() -> None:
 
     provider = create_provider()
     task.init(workspace, provider, depth=0)
+
+    # Plugin system
+    if config.plugins_enabled:
+        from agent.plugins import discover_plugins, load_plugin
+        plugin_files = discover_plugins(str(workspace.root))
+        for pf in plugin_files:
+            manifest = load_plugin(pf, workspace)
+            if manifest:
+                ui_msg = f"  Plugin: {manifest.name} (+{', '.join(manifest.tools_added)})"
+                print(f"\033[2m{ui_msg}\033[0m")
 
     system_prompt = build_system_prompt(str(workspace.root), memory_mgr)
 

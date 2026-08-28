@@ -24,7 +24,8 @@ def test_confirm_commands():
     assert classify_command("git push origin main") == "confirm"
     assert classify_command("pip install requests") == "confirm"
     assert classify_command("npm install express") == "confirm"
-    assert classify_command("rm -rf build/") == "confirm"
+    assert classify_command("rm -rf build/") == "allow"  # 可再生目标：上下文感知降级
+    assert classify_command("rm -rf src/") == "confirm"  # 非可再生目标
     assert classify_command("curl https://example.com") == "confirm"
 
 

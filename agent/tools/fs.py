@@ -141,3 +141,112 @@ def edit_file(path: str, old_string: str, new_string: str) -> ToolResult:
     old_lines = old_string.count("\n") + 1
     new_lines = new_string.count("\n") + 1
     return ToolResult(True, f"Edited '{path}': replaced {old_lines} lines with {new_lines} lines")
+
+
+@tool
+def delete_file(path: str) -> ToolResult:
+    """删除工作区内的一个文件。
+
+    path: 相对于工作区根目录的文件路径
+    """
+    assert _workspace and _registry
+    try:
+        resolved = _workspace.resolve(path)
+        _workspace.check_sensitive(resolved)
+    except WorkspaceError as e:
+        return ToolResult(False, f"Error: {e}")
+
+    if not resolved.exists():
+        return ToolResult(False, f"Error: '{path}' does not exist.")
+
+    if resolved.is_dir():
+        return ToolResult(False, f"Error: '{path}' is a directory. Use bash('rm -r ...') for directories.")
+
+    try:
+        resolved.unlink()
+    except Exception as e:
+        return ToolResult(False, f"Error deleting file: {e}")
+
+    return ToolResult(True, f"Deleted '{path}'")
+
+
+@tool
+def rename_file(old_path: str, new_path: str) -> ToolResult:
+    """重命名或移动文件。
+
+    old_path: 当前文件路径
+    new_path: 目标文件路径
+    """
+    assert _workspace and _registry
+    try:
+        resolved_old = _workspace.resolve(old_path)
+        resolved_new = _workspace.resolve(new_path)
+    except WorkspaceError as e:
+        return ToolResult(False, f"Error: {e}")
+
+    if not resolved_old.exists():
+        return ToolResult(False, f"Error: '{old_path}' does not exist.")
+
+    if resolved_new.exists():
+        return ToolResult(False, f"Error: '{new_path}' already exists.")
+
+    try:
+        resolved_new.parent.mkdir(parents=True, exist_ok=True)
+        resolved_old.rename(resolved_new)
+    except Exception as e:
+        return ToolResult(False, f"Error renaming: {e}")
+
+    return ToolResult(True, f"Renamed '{old_path}' -> '{new_path}'")
+
+
+@tool
+def list_dir(path: str = ".", depth: int = 1) -> ToolResult:
+    """列出目录内容，支持递归深度。
+
+    path: 相对目录路径（默认工作区根目录）
+    depth: 递归深度（1-3，默认 1）
+    """
+    assert _workspace
+    try:
+        resolved = _workspace.resolve(path)
+    except WorkspaceError as e:
+        return ToolResult(False, f"Error: {e}")
+
+    if not resolved.is_dir():
+        return ToolResult(False, f"Error: '{path}' is not a directory.")
+
+    depth = max(1, min(depth, 3))
+    lines: list[str] = []
+    _walk_dir(resolved, resolved, depth, 0, lines)
+
+    if not lines:
+        return ToolResult(True, "(empty directory)")
+    return ToolResult(True, "\n".join(lines))
+
+
+def _walk_dir(root: Path, current: Path, max_depth: int, level: int, lines: list[str]) -> None:
+    """递归列出目录，带缩进和类型标识。"""
+    if level >= max_depth:
+        return
+    try:
+        entries = sorted(current.iterdir(), key=lambda e: (not e.is_dir(), e.name))
+    except PermissionError:
+        lines.append(f"{'  ' * level}  (permission denied)")
+        return
+
+    for entry in entries[:100]:
+        if entry.name.startswith(".") and level == 0:
+            continue
+        indent = "  " * level
+        if entry.is_dir():
+            lines.append(f"{indent}📁 {entry.name}/")
+            _walk_dir(root, entry, max_depth, level + 1, lines)
+        else:
+            size = entry.stat().st_size
+            if size > 1024 * 1024:
+                size_str = f"{size / 1024 / 1024:.1f}MB"
+            elif size > 1024:
+                size_str = f"{size / 1024:.1f}KB"
+            else:
+                size_str = f"{size}B"
+            lines.append(f"{indent}📄 {entry.name} ({size_str})")

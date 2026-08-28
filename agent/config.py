@@ -35,12 +35,21 @@ class Config:
         self.model: str = _get("AGENT_MODEL", "glm-4-flash", fv)
         self.transport: str = _get("AGENT_TRANSPORT", "sdk", fv)
 
-        self.max_iterations: int = int(_get("AGENT_MAX_ITERATIONS", "40", fv))
+        self.max_iterations: int = int(_get("AGENT_MAX_ITERATIONS", "60", fv))
         self.max_output_tokens: int = int(_get("AGENT_MAX_OUTPUT_TOKENS", "8192", fv))
         self.context_limit: int = int(_get("AGENT_CONTEXT_LIMIT", "0", fv))
 
         self.workspace: str = os.environ.get("AGENT_WORKSPACE", os.getcwd())
         self.no_stream: bool = _get("AGENT_NO_STREAM", "", fv).lower() in (
+            "1", "true", "yes",
+        )
+        self.parallel_tools: bool = _get("AGENT_PARALLEL_TOOLS", "true", fv).lower() in (
+            "1", "true", "yes",
+        )
+        self.plugins_enabled: bool = _get("AGENT_PLUGINS", "true", fv).lower() in (
+            "1", "true", "yes",
+        )
+        self.reflection_enabled: bool = _get("AGENT_REFLECTION", "true", fv).lower() in (
             "1", "true", "yes",
         )
 
