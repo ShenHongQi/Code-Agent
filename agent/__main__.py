@@ -205,8 +205,8 @@ def main() -> None:
     ui = UI(stream=not config.no_stream)
     input_mgr = InputManager()
 
-    ui.info(f"🔥 Megumin | model: {config.model} | workspace: {workspace.root}")
-    ui.info("Type your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.\n")
+    from agent.banner import render_banner
+    print(render_banner(model=config.model, workspace=str(workspace.root)))
 
     # Session recovery
     history = None
