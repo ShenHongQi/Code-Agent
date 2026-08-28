@@ -1,0 +1,26 @@
+# 考核题目原件，不入公开仓库
+推免考核题目学生版.pdf
+
+# 凭据
+.env
+.env.*
+!.env.example
+
+# 本地工具配置
+.qoder/settings.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# agent 运行时产物
+.agent_sessions/
+*.log
+
+# OS
+.DS_Store
