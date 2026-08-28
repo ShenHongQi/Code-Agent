@@ -7,23 +7,29 @@
 ## 快速开始
 
 ```bash
-# 1. 克隆仓库
+# 1. 克隆并安装（全局 CLI 命令）
 git clone https://github.com/ShenHongQi/Code-Agent.git
 cd Code-Agent
+pip install -e .
 
-# 2. 安装依赖（仅需 openai 一个包）
-pip install -r requirements.txt
+# 2. 配置 API Key（默认使用智谱 GLM-4-Flash 免费模型）
+export AGENT_API_KEY="your-zhipu-api-key"
 
-# 3. 配置 API Key
-cp .env.example .env
-# 编辑 .env，填入你的 API Key
+# 3. 在任意项目目录下启动
+cd /path/to/your/project
+agent "帮我写一个计算器程序"
 
-# 4. 运行
-export AGENT_API_KEY="your-key-here"
-python -m agent "帮我写一个计算器程序"
+# 或进入交互模式
+agent
+```
 
-# 或者进入交互模式
-python -m agent
+也支持其他 OpenAI 兼容的模型：
+```bash
+# DeepSeek
+export AGENT_API_KEY="your-key"
+export AGENT_BASE_URL="https://api.deepseek.com/v1"
+export AGENT_MODEL="deepseek-chat"
+agent
 ```
 
 ## 技术特性

@@ -1,0 +1,16 @@
+[project]
+name = "coding-agent"
+version = "0.1.0"
+description = "A coding agent that reads/writes files and executes commands via LLM."
+requires-python = ">=3.11"
+dependencies = ["openai>=1.0.0"]
+
+[project.scripts]
+agent = "agent.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -7,9 +7,9 @@ class Config:
     def __init__(self):
         self.api_key: str = os.environ.get("AGENT_API_KEY", "")
         self.base_url: str = os.environ.get(
-            "AGENT_BASE_URL", "https://api.deepseek.com/v1"
+            "AGENT_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
         )
-        self.model: str = os.environ.get("AGENT_MODEL", "deepseek-chat")
+        self.model: str = os.environ.get("AGENT_MODEL", "glm-4-flash")
         self.transport: str = os.environ.get("AGENT_TRANSPORT", "sdk")
 
         self.max_iterations: int = int(os.environ.get("AGENT_MAX_ITERATIONS", "40"))
