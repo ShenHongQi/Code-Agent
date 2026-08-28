@@ -60,7 +60,7 @@ class InputManager:
         width = min(shutil.get_terminal_size().columns, 60)
         line = "─" * width
 
-        sys.stdout.write(f"\n{DIM}{line}{RESET}\n")
+        sys.stdout.write(f"\n{GREEN}{line}{RESET}\n")
         sys.stdout.flush()
 
         if prefill and self._readline_available:
@@ -72,7 +72,7 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        sys.stdout.write(f"{DIM}{line}{RESET}\n")
+        sys.stdout.write(f"{GREEN}{line}{RESET}\n")
         sys.stdout.flush()
 
         return user_input.strip()
