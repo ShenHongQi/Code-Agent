@@ -241,6 +241,8 @@ def main() -> None:
 
     # Interactive REPL
     prefill = ""
+    thinking_history: list[str] = []
+
     while True:
         try:
             user_input = input_mgr.styled_input(prefill=prefill, model=config.model)
@@ -259,12 +261,20 @@ def main() -> None:
             input_mgr.save_history()
             break
 
+        # /think 命令：展开上一轮的中间思考
+        if user_input.lower() in ("/think", "/thinking"):
+            ui.show_full_thinking(thinking_history)
+            continue
+
+        # 新一轮对话：清空思考记录
+        thinking_history.clear()
+
         # Run with ESC detection
         esc_detector = EscDetector()
         esc_detector.start()
         try:
             _run_turn(user_input, history, provider, ui, memory_mgr, str(workspace.root),
-                      esc_detector.event)
+                      esc_detector.event, thinking_history)
         except EscInterrupt:
             prefill = user_input
             ui.warning("\n⚠ Interrupted (ESC). Edit and re-send.")
@@ -283,7 +293,8 @@ def main() -> None:
 
 
 def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
-              workspace_root=None, interrupt_event=None) -> None:
+              workspace_root=None, interrupt_event=None,
+              thinking_log: list[str] | None = None) -> None:
     from agent.history import make_user
     from agent.loop import run_loop
     from agent.terminal import EscInterrupt
@@ -295,6 +306,7 @@ def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
         interrupt_event=interrupt_event,
         memory_mgr=memory_mgr,
         workspace_root=workspace_root,
+        thinking_log=thinking_log,
     )
 
     if result.reason == "max_iterations":

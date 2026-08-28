@@ -69,6 +69,7 @@ def run_loop(
     interrupt_event: threading.Event | None = None,
     memory_mgr=None,
     workspace_root: str | None = None,
+    thinking_log: list[str] | None = None,
 ) -> LoopResult:
     """执行 agent loop 直到终止条件满足。"""
     global _extend_requested
@@ -128,6 +129,7 @@ def run_loop(
             history.append(make_user(reflection))
             messages = history.get_messages_for_api()
 
+        ui.assistant_start()
         try:
             acc = _stream_step_with_retry(provider, messages, tools_schema, ui)
         except ContextLengthExceeded:
@@ -153,15 +155,16 @@ def run_loop(
         assistant_msg = acc.to_message()
         history.append(assistant_msg)
 
-        # Show content
-        if not config.no_stream and acc.content:
-            pass  # already streamed
-        ui.assistant_end(acc.content or "")
+        # 停止 spinner
+        ui.assistant_end()
 
-        # Check natural stop
+        # Check natural stop → 最终回答
         if acc.is_natural_stop:
             # 纠偏：如果 assistant 只输出文本且包含代码块/命令，提醒它调用工具
             if acc.content and _looks_like_missed_tool_call(acc.content) and iteration < max_iter - 1:
+                ui.show_thinking(acc.content)
+                if thinking_log is not None:
+                    thinking_log.append(acc.content)
                 nudge = (
                     "[System] 你刚才描述了要执行的操作但没有调用工具。"
                     "请不要只描述命令——直接调用 bash/write_file/edit_file 等工具来执行。"
@@ -169,10 +172,18 @@ def run_loop(
                 )
                 history.append(make_user(nudge))
                 continue
+
+            # 最终回答：完整 Markdown 渲染
+            ui.show_response(acc.content or "")
+            ui.show_thinking_summary()
             return LoopResult("natural_stop", iteration)
 
-        # Process tool calls
+        # Process tool calls → 中间思考
         if acc.has_tool_calls:
+            if acc.content:
+                ui.show_thinking(acc.content)
+                if thinking_log is not None:
+                    thinking_log.append(acc.content)
             try:
                 _execute_tools(acc, history, ui, allowed_tools, interrupt_event)
             except (KeyboardInterrupt, EscInterrupt):
@@ -184,6 +195,7 @@ def run_loop(
             finally:
                 history.seal_pending_tool_calls()
 
+    ui.show_thinking_summary()
     return LoopResult("max_iterations", iteration)
 
 
@@ -247,14 +259,11 @@ def _stream_step(
     tools_schema: list[dict[str, Any]],
     ui: UI,
 ) -> StreamAccumulator:
-    """执行一次 LLM 调用（流式），渲染增量 token。"""
-    ui.assistant_start()
+    """执行一次 LLM 调用（流式），静默缓冲（spinner 由调用方控制）。"""
     acc = StreamAccumulator()
 
     for chunk in provider.stream_chat(messages, tools_schema):
-        new_text = acc.feed(chunk)
-        if new_text:
-            ui.stream_token(new_text)
+        acc.feed(chunk)
 
     return acc
 
