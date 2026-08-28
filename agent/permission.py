@@ -33,8 +33,8 @@ CONFIRM_PATTERNS = [
     r"\bwget\b",
     r"\bapt\b",
     r"\bbrew\s+install\b",
-    r"\brm\s+-r\b",
-    r"\brm\s+-f\b",
+    r"\brm\s+-[rf]*r[f]*\b",
+    r"\brm\s+-[rf]*f[r]*\b",
     r"\bchmod\b",
     r"\bchown\b",
 ]

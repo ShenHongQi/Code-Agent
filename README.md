@@ -4,12 +4,89 @@
 
 **不使用任何 agent 框架 / SDK**，也不依赖 API 服务端托管的代码执行或文件工具。对话历史与上下文管理、工具定义与本地执行、模型输出解析、循环终止条件、错误处理全部自行编写。
 
-- 语言：Python 3.13
-- 模型接入：自研 provider 抽象层，对接 OpenAI 兼容网关（默认 DeepSeek，可切 Kimi / Qwen / GLM / OpenAI）
-- 运行时依赖：一个 HTTP client；另提供纯标准库的 `urllib` + 手写 SSE 实现作为可切换的第二传输层
+## 快速开始
 
-## 设计方案
+```bash
+# 1. 克隆仓库
+git clone https://github.com/ShenHongQi/Code-Agent.git
+cd Code-Agent
 
-完整设计文档见 **[docs/DESIGN.md](docs/DESIGN.md)** —— 包含模块结构、agent loop 与终止条件、工具系统、上下文压缩、安全与权限模型、子代理、流式 UI、错误处理，以及每个决策被拒绝的替代方案与理由。
+# 2. 安装依赖（仅需 openai 一个包）
+pip install -r requirements.txt
+
+# 3. 配置 API Key
+cp .env.example .env
+# 编辑 .env，填入你的 API Key
+
+# 4. 运行
+export AGENT_API_KEY="your-key-here"
+python -m agent "帮我写一个计算器程序"
+
+# 或者进入交互模式
+python -m agent
+```
+
+## 技术特性
+
+- **语言**：Python 3.13，约 2500 行
+- **模型接入**：自研 Provider 抽象层，对接 OpenAI 兼容网关（默认 DeepSeek，可切 Kimi / Qwen / GLM / OpenAI）
+- **双传输层**：SDK 实现 + 纯标准库 `urllib` + 手写 SSE 解析（`AGENT_TRANSPORT=raw` 切换）
+- **运行时依赖**：仅 `openai` 一个包
+
+## 核心模块
+
+| 模块 | 职责 |
+|------|------|
+| `agent/loop.py` | Agent loop 主循环，5 类终止条件 |
+| `agent/context.py` | Token 估算校准 + 锚定式 compaction + 安全切点 + 孤儿自愈 |
+| `agent/stream.py` | SSE delta 累积，tool_call 跨 chunk 重组 |
+| `agent/history.py` | 消息构造，会话状态，seal_pending_tool_calls |
+| `agent/tools/` | @tool 装饰器 registry，签名→schema，手写校验器 |
+| `agent/workspace.py` | 路径收敛，敏感文件拦截，FileRegistry 新鲜度 |
+| `agent/permission.py` | 三级危险分类（allow/confirm/block） |
+| `agent/shell.py` | ShellRunner（stdin=DEVNULL, 进程组 kill, 有界 drain） |
+| `agent/transport.py` | 纯 stdlib Provider 实现，证明 SDK 可替换 |
+
+## 工具集
+
+| 工具 | 功能 |
+|------|------|
+| `read_file` | 带行号读取文件，写入 FileRegistry |
+| `write_file` | 新建文件（已存在则拒绝） |
+| `edit_file` | 精确唯一字符串替换，mtime 校验 |
+| `glob` | 按模式列路径，200 条封顶，按 mtime 排序 |
+| `grep` | 正则搜索内容，100 匹配封顶 |
+| `bash` | Shell 执行，超时/输出封顶/权限检查 |
+| `todo_write` | 多步任务计划 |
+| `task` | 派生只读子代理探索代码库 |
+
+## 运行测试
+
+```bash
+python -m tests.test_stream
+python -m tests.test_context
+python -m tests.test_permission
+python -m tests.test_workspace
+python -m tests.test_tools
+```
+
+## 配置项
+
+通过环境变量或 `.env` 文件配置：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `AGENT_API_KEY` | (必填) | API Key |
+| `AGENT_BASE_URL` | `https://api.deepseek.com/v1` | API 端点 |
+| `AGENT_MODEL` | `deepseek-chat` | 模型名 |
+| `AGENT_TRANSPORT` | `sdk` | 传输层（`sdk` 或 `raw`） |
+| `AGENT_MAX_ITERATIONS` | `40` | 单轮最大迭代 |
+| `AGENT_WORKSPACE` | `cwd` | 工作区路径 |
+| `AGENT_CONTEXT_LIMIT` | `0`（用默认） | 强制上下文限制（测试用） |
+| `AGENT_NO_STREAM` | `false` | 禁用流式输出 |
+
+## 设计文档
+
+完整设计文档见 **[docs/DESIGN.md](docs/DESIGN.md)** —— 包含每个决策被拒绝的替代方案与理由，为答辩准备。
 
 > 注：本文件是仓库说明，不是考核提交物中的 `README.txt`（后者另行撰写，1000 汉字以内）。
