@@ -38,6 +38,58 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _first_run_setup() -> None:
+    """首次启动时交互式配置 API Key，保存到 ~/.megumin/config。"""
+    from pathlib import Path
+
+    config_dir = Path.home() / ".megumin"
+    config_file = config_dir / "config"
+
+    print("\n🔥 Megumin Coding Agent — 首次启动配置")
+    print("=" * 42)
+    print()
+    print("默认使用智谱 GLM-4-Flash（免费模型）")
+    print("申请 API Key: https://open.bigmodel.cn/")
+    print()
+
+    api_key = input("请输入 API Key: ").strip()
+    if not api_key:
+        return
+
+    print()
+    print("选择模型 provider:")
+    print("  1. 智谱 GLM-4-Flash (免费，默认)")
+    print("  2. DeepSeek")
+    print("  3. OpenAI")
+    print("  4. 自定义")
+    choice = input("选择 [1]: ").strip() or "1"
+
+    providers = {
+        "1": ("https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        "2": ("https://api.deepseek.com/v1", "deepseek-chat"),
+        "3": ("https://api.openai.com/v1", "gpt-4o"),
+    }
+
+    if choice in providers:
+        base_url, model = providers[choice]
+    else:
+        base_url = input("API Base URL: ").strip()
+        model = input("模型名称: ").strip()
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        f"AGENT_API_KEY={api_key}\n"
+        f"AGENT_BASE_URL={base_url}\n"
+        f"AGENT_MODEL={model}\n"
+    )
+    config_file.chmod(0o600)
+
+    print()
+    print(f"✅ 配置已保存到 {config_file}")
+    print(f"   模型: {model}")
+    print()
+
+
 def main() -> None:
     args = parse_args()
 
@@ -51,11 +103,18 @@ def main() -> None:
     if args.context_limit:
         config.context_limit = args.context_limit
 
-    # Check API key
+    # 首次启动：交互式配置 API Key
     if not config.api_key:
-        print("Error: AGENT_API_KEY environment variable is required.", file=sys.stderr)
-        print("Set it in your environment or in a .env file.", file=sys.stderr)
-        sys.exit(1)
+        _first_run_setup()
+        # Reload config after setup
+        from agent.config import Config
+        new_cfg = Config()
+        config.api_key = new_cfg.api_key
+        config.base_url = new_cfg.base_url
+        config.model = new_cfg.model
+        if not config.api_key:
+            print("Error: API Key 未配置，无法启动。", file=sys.stderr)
+            sys.exit(1)
 
     # Initialize subsystems
     from agent.workspace import Workspace, FileRegistry

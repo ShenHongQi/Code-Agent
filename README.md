@@ -7,30 +7,23 @@
 ## 快速开始
 
 ```bash
-# 1. 克隆并安装（全局 CLI 命令）
+# 安装（需要 uv，没有的话先 curl -LsSf https://astral.sh/uv/install.sh | sh）
 git clone https://github.com/ShenHongQi/Code-Agent.git
 cd Code-Agent
-pip install -e .
+uv tool install -e .
 
-# 2. 配置 API Key（默认使用智谱 GLM-4-Flash 免费模型）
-export AGENT_API_KEY="your-zhipu-api-key"
-
-# 3. 在任意项目目录下启动
-cd /path/to/your/project
-agent "帮我写一个计算器程序"
-
-# 或进入交互模式
-agent
+# 首次启动会交互式引导配置 API Key
+megumin
 ```
 
-也支持其他 OpenAI 兼容的模型：
+安装后在任意目录使用：
 ```bash
-# DeepSeek
-export AGENT_API_KEY="your-key"
-export AGENT_BASE_URL="https://api.deepseek.com/v1"
-export AGENT_MODEL="deepseek-chat"
-agent
+cd /path/to/your/project
+megumin                    # 交互模式
+megumin "写一个排序算法"   # 单次任务
 ```
+
+配置保存在 `~/.megumin/config`，后续启动无需再配置。
 
 ## 技术特性
 
