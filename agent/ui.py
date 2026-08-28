@@ -13,12 +13,11 @@ from agent.markdown import StreamingMarkdownRenderer, render_markdown
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-CYAN = "\033[36m"
-GREEN = "\033[32m"
+ORANGE = "\033[38;5;208m"
+RED_ORANGE = "\033[38;5;202m"
 YELLOW = "\033[33m"
 RED = "\033[31m"
-MAGENTA = "\033[35m"
-BLUE = "\033[34m"
+GREEN = "\033[32m"
 
 # 动态指示器帧
 SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -85,7 +84,7 @@ class _StatusSpinner:
             elif self._state == "tool":
                 state_text = f" {DIM}(running tool...){RESET}"
 
-            line = f"\r{BOLD}{CYAN}{frame} {self._label}{RESET}{state_text}  "
+            line = f"\r{BOLD}{ORANGE}{frame} {self._label}{RESET}{state_text}  "
 
             with self._lock:
                 sys.stdout.write(line)
@@ -159,7 +158,7 @@ class UI:
             return
 
         content = self._sanitize(content)
-        sys.stdout.write(f"\n{BOLD}{CYAN}● Assistant{RESET}\n")
+        sys.stdout.write(f"\n{BOLD}{ORANGE}● Assistant{RESET}\n")
         rendered = render_markdown(content)
         sys.stdout.write(rendered + "\n")
         sys.stdout.flush()

@@ -137,7 +137,7 @@ def classify_command(command: str) -> str:
 RESET = "\033[0m"
 BOLD = "\033[1m"
 YELLOW = "\033[33m"
-GREEN = "\033[32m"
+ORANGE = "\033[38;5;208m"
 DIM = "\033[2m"
 
 
@@ -166,7 +166,7 @@ def _ask_confirmation(command: str) -> None:
     sys.stdout.write(f"{YELLOW}⚠ 需要确认:{RESET}\n")
     sys.stdout.write(f"  {BOLD}{command}{RESET}\n")
     sys.stdout.write(f"{sep}\n")
-    sys.stdout.write(f"  {GREEN}[y]{RESET} 允许一次  {GREEN}[a]{RESET} 本次会话允许同类  {GREEN}[n]{RESET} 拒绝  > ")
+    sys.stdout.write(f"  {ORANGE}[y]{RESET} 允许一次  {ORANGE}[a]{RESET} 本次会话允许同类  {ORANGE}[n]{RESET} 拒绝  > ")
     sys.stdout.flush()
 
     try:

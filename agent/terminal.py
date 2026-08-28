@@ -15,8 +15,8 @@ HISTORY_SIZE = 1000
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-GREEN = "\033[32m"
-CYAN = "\033[36m"
+ORANGE = "\033[38;5;208m"
+RED_ORANGE = "\033[38;5;202m"
 YELLOW = "\033[33m"
 
 
@@ -58,7 +58,7 @@ class InputManager:
     def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示上下分隔线框住的输入区域，输入时即可见。"""
         width = shutil.get_terminal_size().columns
-        sep = f"{GREEN}{'─' * width}{RESET}"
+        sep = f"{ORANGE}{'─' * width}{RESET}"
 
         # 画框架：顶线、空行（输入位置）、底线、模型
         sys.stdout.write(f"\n{sep}\n")
@@ -77,7 +77,7 @@ class InputManager:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
         try:
-            user_input = input(f"{BOLD}{GREEN}> {RESET}")
+            user_input = input(f"{BOLD}{ORANGE}> {RESET}")
         finally:
             if self._readline_available:
                 self._readline.set_startup_hook()

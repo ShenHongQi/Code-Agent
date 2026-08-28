@@ -21,6 +21,9 @@ MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 WHITE = "\033[37m"
 GRAY = "\033[90m"
+ORANGE = "\033[38;5;208m"
+RED_ORANGE = "\033[38;5;202m"
+LIGHT_ORANGE = "\033[38;5;214m"
 
 # Background
 BG_GRAY = "\033[48;5;236m"
@@ -114,7 +117,7 @@ class StreamingMarkdownRenderer:
         if list_match:
             indent = list_match.group(1)
             content = list_match.group(3)
-            return f"{indent}{CYAN}•{RESET} {self._render_inline(content)}"
+            return f"{indent}{ORANGE}•{RESET} {self._render_inline(content)}"
 
         # 有序列表
         olist_match = re.match(r'^(\s*)(\d+)[.)]\s+(.+)$', line)
@@ -122,7 +125,7 @@ class StreamingMarkdownRenderer:
             indent = olist_match.group(1)
             num = olist_match.group(2)
             content = olist_match.group(3)
-            return f"{indent}{CYAN}{num}.{RESET} {self._render_inline(content)}"
+            return f"{indent}{ORANGE}{num}.{RESET} {self._render_inline(content)}"
 
         # 引用块
         if stripped.startswith(">"):
@@ -134,8 +137,8 @@ class StreamingMarkdownRenderer:
 
     def _render_header(self, level: int, text: str) -> str:
         """渲染标题。"""
-        colors = {1: BOLD + CYAN, 2: BOLD + GREEN, 3: BOLD + YELLOW,
-                  4: BOLD + MAGENTA, 5: BOLD + BLUE, 6: BOLD + WHITE}
+        colors = {1: BOLD + ORANGE, 2: BOLD + RED_ORANGE, 3: BOLD + LIGHT_ORANGE,
+                  4: BOLD + YELLOW, 5: BOLD + MAGENTA, 6: BOLD + WHITE}
         color = colors.get(level, BOLD)
         prefix = "━" * level + " " if level <= 2 else ""
         return f"\n{color}{prefix}{text}{RESET}"
@@ -155,7 +158,7 @@ class StreamingMarkdownRenderer:
             # 截断过长行
             display = code_line[:width - 2]
             padding = " " * max(0, width - 1 - len(display))
-            lines.append(f"{DIM}│{RESET} {BG_CODE}{GREEN}{display}{padding}{RESET}{DIM}│{RESET}")
+            lines.append(f"{DIM}│{RESET} {BG_CODE}{LIGHT_ORANGE}{display}{padding}{RESET}{DIM}│{RESET}")
 
         # 底部边框
         bottom = f"{DIM}└{'─' * (width + 1)}┘{RESET}"
@@ -168,7 +171,7 @@ class StreamingMarkdownRenderer:
         # 行内代码 (先处理，避免内部格式被解析)
         text = re.sub(
             r'`([^`]+)`',
-            lambda m: f"{BG_GRAY}{CYAN}{m.group(1)}{RESET}",
+            lambda m: f"{BG_GRAY}{ORANGE}{m.group(1)}{RESET}",
             text
         )
 
