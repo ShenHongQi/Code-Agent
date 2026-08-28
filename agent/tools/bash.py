@@ -8,6 +8,7 @@ import threading
 
 from agent.tools import tool, ToolResult
 from agent.workspace import Workspace
+from agent.permission import check_permission, PermissionDenied
 
 _workspace: Workspace | None = None
 
@@ -42,6 +43,11 @@ def bash(command: str, timeout: int = 120) -> ToolResult:
     """
     assert _workspace
     timeout = min(max(timeout, 1), MAX_TIMEOUT)
+
+    try:
+        check_permission(command)
+    except PermissionDenied as e:
+        return ToolResult(False, f"Permission denied: {e}")
 
     try:
         proc = subprocess.Popen(

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent.config import config
+from agent.context import ContextManager
 from agent.history import History, make_user, make_tool
 from agent.llm import Provider, stream_with_retry, LLMError, ContextLengthExceeded
 from agent.stream import StreamAccumulator
@@ -24,10 +25,12 @@ def run_loop(
     provider: Provider,
     ui: UI,
     max_iterations: int | None = None,
+    context_mgr: ContextManager | None = None,
 ) -> LoopResult:
     """执行 agent loop 直到终止条件满足。"""
     max_iter = max_iterations or config.max_iterations
     tools_schema = get_tools_schema()
+    ctx = context_mgr or ContextManager(provider)
     iteration = 0
 
     while iteration < max_iter:
@@ -35,12 +38,25 @@ def run_loop(
 
         messages = history.get_messages_for_api()
 
+        # Compaction check
+        if ctx.should_compact(messages):
+            ui.info("[compacting context...]")
+            compacted = ctx.compact(messages)
+            history._messages = compacted[1:]  # skip system (it's stored separately)
+            messages = history.get_messages_for_api()
+
         try:
             acc = _stream_step(provider, messages, tools_schema, ui)
         except ContextLengthExceeded:
-            ui.warning("Context length exceeded. Attempting compaction...")
-            # TODO: hook into context.py compaction in Stage 3
-            return LoopResult("context_exhausted", iteration)
+            ui.warning("Context length exceeded. Forcing compaction...")
+            compacted = ctx.compact(messages)
+            history._messages = compacted[1:]
+            messages = history.get_messages_for_api()
+            try:
+                acc = _stream_step(provider, messages, tools_schema, ui)
+            except (ContextLengthExceeded, LLMError) as e2:
+                ui.error(f"Still exceeding after compaction: {e2}")
+                return LoopResult("context_exhausted", iteration)
         except LLMError as e:
             ui.error(str(e))
             return LoopResult("fatal_error", iteration)

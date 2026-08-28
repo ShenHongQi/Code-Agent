@@ -59,7 +59,7 @@ def main() -> None:
 
     # Initialize subsystems
     from agent.workspace import Workspace, FileRegistry
-    from agent.tools import fs, search, bash, todo  # noqa: F401 - register tools
+    from agent.tools import fs, search, bash, todo, task  # noqa: F401 - register tools
     from agent.llm import create_provider
     from agent.history import History
     from agent.prompts import SYSTEM_PROMPT
@@ -74,6 +74,8 @@ def main() -> None:
     bash.init(workspace)
 
     provider = create_provider()
+    task.init(workspace, provider, depth=0)
+
     history = History(SYSTEM_PROMPT)
     ui = UI(stream=not config.no_stream)
 
