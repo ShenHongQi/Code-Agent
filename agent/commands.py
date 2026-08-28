@@ -90,7 +90,8 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
     """交互式恢复历史会话。"""
     from agent.terminal import select_menu
 
-    sessions = ctx.session_mgr.list_for_workspace(ctx.workspace)
+    all_sessions = ctx.session_mgr.list_for_workspace(ctx.workspace)
+    sessions = [s for s in all_sessions if s.get("turns", 0) > 0]
     if not sessions:
         ctx.ui.warning("当前工作区没有历史会话。")
         return
