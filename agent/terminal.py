@@ -292,15 +292,25 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
     selected = 0
     total = len(items)
 
+    # 截断选项到终端宽度，防止换行导致光标定位错误
+    cols = shutil.get_terminal_size().columns
+    max_item_width = cols - 6  # 留出 "  ❯ " 前缀宽度
+    display_items = [
+        item[:max_item_width] + ("…" if len(item) > max_item_width else "")
+        for item in items
+    ]
+
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
 
+    # 渲染行数固定 = title(1) + items(total)
+    render_lines = total + 1
+
     def _render():
-        # 清除之前渲染的行，重绘
-        sys.stdout.write(f"\033[{total + 1}A")  # 移到标题行
-        sys.stdout.write(f"\033[J")  # 清除到底部
+        sys.stdout.write(f"\033[{render_lines}A")  # 回到标题行
+        sys.stdout.write("\033[J")  # 清除到底部
         sys.stdout.write(f"{BOLD}{title}{RESET}\n")
-        for i, item in enumerate(items):
+        for i, item in enumerate(display_items):
             if i == selected:
                 sys.stdout.write(f"  {BOLD}{ORANGE}❯ {item}{RESET}\n")
             else:
@@ -312,7 +322,7 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
 
         # 首次渲染
         sys.stdout.write(f"{BOLD}{title}{RESET}\n")
-        for i, item in enumerate(items):
+        for i, item in enumerate(display_items):
             if i == selected:
                 sys.stdout.write(f"  {BOLD}{ORANGE}❯ {item}{RESET}\n")
             else:
@@ -323,7 +333,6 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
             ch = sys.stdin.read(1)
 
             if ch == "\x1b":
-                # 读取转义序列
                 seq = sys.stdin.read(2)
                 if seq == "[A":  # 上
                     selected = (selected - 1) % total
@@ -332,13 +341,12 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
                     selected = (selected + 1) % total
                     _render()
                 elif seq == "" or seq[0] != "[":
-                    # 裸 ESC
                     return None
-            elif ch in ("\r", "\n"):  # Enter
+            elif ch in ("\r", "\n"):
                 return selected
             elif ch in ("q", "Q"):
                 return None
-            elif ch == "\x03":  # Ctrl+C
+            elif ch == "\x03":
                 return None
 
     except (termios.error, OSError, KeyboardInterrupt):
