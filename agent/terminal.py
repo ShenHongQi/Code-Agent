@@ -58,25 +58,21 @@ class InputManager:
     def styled_input(self, prefill: str = "") -> str:
         """显示视觉化输入框并读取用户输入。"""
         width = min(shutil.get_terminal_size().columns, 60)
-        bar = "─" * (width - 6)
+        line = "─" * width
 
-        # 顶线
-        sys.stdout.write(f"\n{BOLD}{GREEN}╭─ You {bar}{RESET}\n")
-        sys.stdout.write(f"{BOLD}{GREEN}│{RESET} ")
+        sys.stdout.write(f"\n{DIM}{line}{RESET}\n")
         sys.stdout.flush()
 
-        # 预填支持
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
         try:
-            user_input = input()
+            user_input = input(f"{BOLD}{GREEN}> {RESET}")
         finally:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        # 底线
-        sys.stdout.write(f"{BOLD}{GREEN}╰{bar}──────{RESET}\n")
+        sys.stdout.write(f"{DIM}{line}{RESET}\n")
         sys.stdout.flush()
 
         return user_input.strip()

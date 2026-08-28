@@ -34,11 +34,13 @@ def run_loop(
     context_mgr: ContextManager | None = None,
     allowed_tools: set[str] | None = None,
     interrupt_event: threading.Event | None = None,
+    memory_mgr=None,
+    workspace_root: str | None = None,
 ) -> LoopResult:
     """执行 agent loop 直到终止条件满足。"""
     max_iter = max_iterations or config.max_iterations
     tools_schema = get_tools_schema(allowed_tools)
-    ctx = context_mgr or ContextManager(provider)
+    ctx = context_mgr or ContextManager(provider, memory_mgr=memory_mgr)
     iteration = 0
 
     while iteration < max_iter:
@@ -47,6 +49,12 @@ def run_loop(
         # Check ESC interrupt
         if interrupt_event and interrupt_event.is_set():
             raise EscInterrupt()
+
+        # Memory hot-reload: rebuild system prompt if memory changed
+        if memory_mgr and memory_mgr.has_changed() and workspace_root:
+            from agent.prompts import build_system_prompt
+            new_prompt = build_system_prompt(workspace_root, memory_mgr)
+            history.update_system(new_prompt)
 
         messages = history.get_messages_for_api()
 

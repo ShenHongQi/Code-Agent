@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
         help="Force a context token limit (for testing compaction)",
     )
     parser.add_argument(
+        "--new-session",
+        action="store_true",
+        help="Force a new session (skip recovery prompt)",
+    )
+    parser.add_argument(
         "prompt",
         nargs="*",
         help="Initial prompt (if not given, enters interactive mode)",
@@ -90,6 +95,40 @@ def _first_run_setup() -> None:
     print()
 
 
+def _try_resume_session(session_mgr, workspace_root: str, system_prompt: str):
+    """尝试恢复上次会话，返回 (History, session_meta) 或 (None, None)。"""
+    from agent.history import History
+
+    meta = session_mgr.latest_for_workspace(workspace_root)
+    if not meta:
+        return None, None
+
+    updated = meta.get("updated_at", "")[:16].replace("T", " ")
+    turns = meta.get("turns", 0)
+    summary = meta.get("summary", "")[:80]
+
+    print(f"  检测到上次会话 ({updated}, {turns} 轮)")
+    if summary:
+        print(f"  摘要: {summary}")
+    print()
+
+    try:
+        choice = input("  [r] 恢复上次会话  [n] 新建  > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        choice = "n"
+
+    if choice == "r":
+        try:
+            messages, loaded_meta = session_mgr.load(meta["session_id"])
+            history = History.from_serializable(system_prompt, messages)
+            print(f"  ✅ 已恢复 {len(messages)} 条消息\n")
+            return history, loaded_meta
+        except (OSError, KeyError, ValueError) as e:
+            print(f"  ⚠ 恢复失败: {e}，启动新会话\n")
+
+    return None, None
+
+
 def main() -> None:
     args = parse_args()
 
@@ -118,9 +157,12 @@ def main() -> None:
     # Initialize subsystems
     from agent.workspace import Workspace, FileRegistry
     from agent.tools import fs, search, bash, todo, task  # noqa: F401 - register tools
+    from agent.tools import memory as memory_tool  # noqa: F401 - register memory tools
     from agent.llm import create_provider
     from agent.history import History
     from agent.prompts import build_system_prompt
+    from agent.memory import MemoryManager
+    from agent.session import SessionManager
     from agent.ui import UI
     from agent.loop import run_loop
     from agent.terminal import InputManager, Spinner, EscDetector, EscInterrupt
@@ -132,11 +174,20 @@ def main() -> None:
     search.init(workspace)
     bash.init(workspace)
 
+    # Memory system
+    memory_mgr = MemoryManager(str(workspace.root))
+    memory_tool.init(memory_mgr)
+
+    # Session system
+    session_mgr = SessionManager()
+
     provider = create_provider()
     task.init(workspace, provider, depth=0)
 
-    system_prompt = build_system_prompt(str(workspace.root))
-    history = History(system_prompt)
+    system_prompt = build_system_prompt(str(workspace.root), memory_mgr)
+
+    # Initialize memory mtime tracking
+    memory_mgr.has_changed()
 
     ui = UI(stream=not config.no_stream)
     spinner = Spinner()
@@ -146,10 +197,34 @@ def main() -> None:
     ui.info(f"🔥 Megumin | model: {config.model} | workspace: {workspace.root}")
     ui.info("Type your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.\n")
 
+    # Session recovery
+    history = None
+    session_meta = None
+
+    if not args.new_session:
+        history, session_meta = _try_resume_session(
+            session_mgr, str(workspace.root), system_prompt
+        )
+
+    if history is None:
+        history = History(system_prompt)
+        session_id = SessionManager.create_session_id(str(workspace.root))
+        session_meta = {
+            "session_id": session_id,
+            "workspace": str(workspace.root),
+            "model": config.model,
+            "created_at": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(),
+            "turns": 0,
+            "summary": "",
+        }
+
     # One-shot mode
     initial_prompt = " ".join(args.prompt) if args.prompt else None
     if initial_prompt:
-        _run_turn(initial_prompt, history, provider, ui)
+        _run_turn(initial_prompt, history, provider, ui, memory_mgr, str(workspace.root))
+        _save_session(session_mgr, history, session_meta)
         input_mgr.save_history()
         return
 
@@ -161,6 +236,7 @@ def main() -> None:
             prefill = ""
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
+            _save_session(session_mgr, history, session_meta)
             input_mgr.save_history()
             break
 
@@ -168,6 +244,7 @@ def main() -> None:
             continue
         if user_input.lower() in ("exit", "quit", "/exit", "/quit"):
             print("Goodbye!")
+            _save_session(session_mgr, history, session_meta)
             input_mgr.save_history()
             break
 
@@ -175,7 +252,8 @@ def main() -> None:
         esc_detector = EscDetector()
         esc_detector.start()
         try:
-            _run_turn(user_input, history, provider, ui, esc_detector.event)
+            _run_turn(user_input, history, provider, ui, memory_mgr, str(workspace.root),
+                      esc_detector.event)
         except EscInterrupt:
             prefill = user_input
             ui.warning("\n⚠ Interrupted (ESC). Edit and re-send.")
@@ -185,17 +263,28 @@ def main() -> None:
         finally:
             esc_detector.stop()
 
-    input_mgr.save_history()
+        # Auto-save after each turn
+        session_meta["turns"] = session_meta.get("turns", 0) + 1
+        _save_session(session_mgr, history, session_meta)
+
+    # Cleanup old sessions
+    session_mgr.cleanup()
 
 
-def _run_turn(user_input: str, history, provider, ui, interrupt_event=None) -> None:
+def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
+              workspace_root=None, interrupt_event=None) -> None:
     from agent.history import make_user
     from agent.loop import run_loop
     from agent.terminal import EscInterrupt
 
     history.append(make_user(user_input))
 
-    result = run_loop(history, provider, ui, interrupt_event=interrupt_event)
+    result = run_loop(
+        history, provider, ui,
+        interrupt_event=interrupt_event,
+        memory_mgr=memory_mgr,
+        workspace_root=workspace_root,
+    )
 
     if result.reason == "max_iterations":
         ui.warning(f"\nReached iteration limit ({result.iterations}). You can continue the conversation.")
@@ -203,6 +292,23 @@ def _run_turn(user_input: str, history, provider, ui, interrupt_event=None) -> N
         ui.error("Context window exhausted. Consider starting a new session.")
     elif result.reason == "fatal_error":
         ui.error("A fatal error occurred. Check your API key and configuration.")
+
+
+def _save_session(session_mgr, history, meta: dict) -> None:
+    """保存当前会话到磁盘。"""
+    try:
+        messages = history.to_serializable()
+        # 生成简短摘要用于恢复提示
+        if messages:
+            last_assistant = ""
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant" and msg.get("content"):
+                    last_assistant = msg["content"][:200]
+                    break
+            meta["summary"] = last_assistant
+        session_mgr.save(messages, meta)
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

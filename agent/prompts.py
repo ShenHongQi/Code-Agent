@@ -3,15 +3,15 @@
 from __future__ import annotations
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent.memory import MemoryManager
 
 
-SYSTEM_PROMPT_TEMPLATE = """\
+BASE_PROMPT = """\
 You are a coding agent. You help the user accomplish programming tasks by reading \
 files, writing code, and executing commands in the workspace.
-
-## Workspace
-- Root: {workspace_root}
-{workspace_tree}
 
 ## Rules
 - Always work within the workspace directory.
@@ -21,9 +21,10 @@ files, writing code, and executing commands in the workspace.
 - Be concise in explanations; let code speak for itself.
 - If a task requires multiple steps, use todo_write to plan them out.
 - Use task to delegate read-only exploration to a sub-agent when it would generate too much context.
+- Use memory_write to save important project knowledge for future sessions.
 
 ## Available tools
-read_file, write_file, edit_file, glob, grep, bash, todo_write, task
+read_file, write_file, edit_file, glob, grep, bash, todo_write, task, memory_write, memory_read, memory_forget
 """
 
 SUBAGENT_PROMPT = """\
@@ -35,8 +36,20 @@ returned to the parent agent as the tool result.
 """
 
 
-def build_system_prompt(workspace_root: str) -> str:
-    """构建动态 system prompt，注入工作区路径和顶层文件结构。"""
+def build_system_prompt(workspace_root: str, memory_mgr: "MemoryManager | None" = None) -> str:
+    """构建动态 system prompt，注入工作区信息和记忆。"""
+    sections: list[str] = []
+
+    # 1. 基础身份与规则
+    sections.append(BASE_PROMPT)
+
+    # 2. 项目记忆
+    if memory_mgr:
+        project_mem = memory_mgr.load_project()
+        if project_mem:
+            sections.append(f"## Project Context (from memory)\n{project_mem}")
+
+    # 3. 工作区结构
     root = Path(workspace_root)
     tree_lines = []
     try:
@@ -52,8 +65,12 @@ def build_system_prompt(workspace_root: str) -> str:
         tree_lines.append("  (unable to list)")
 
     tree_str = "\n".join(tree_lines) if tree_lines else "  (empty)"
-    return SYSTEM_PROMPT_TEMPLATE.format(
-        workspace_root=workspace_root,
-        workspace_tree=tree_str,
-    )
+    sections.append(f"## Workspace\n- Root: {workspace_root}\n{tree_str}")
 
+    # 4. 全局记忆/用户偏好
+    if memory_mgr:
+        global_mem = memory_mgr.load_global()
+        if global_mem:
+            sections.append(f"## User Preferences\n{global_mem}")
+
+    return "\n\n".join(sections)

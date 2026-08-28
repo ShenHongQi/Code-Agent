@@ -60,5 +60,20 @@ class History:
                 answered.add(msg["tool_call_id"])
         return [tc_id for tc_id in called if tc_id not in answered]
 
+    def to_serializable(self) -> list[dict[str, Any]]:
+        """返回可 JSON 序列化的消息列表（不含 system）。"""
+        return list(self._messages)
+
+    @classmethod
+    def from_serializable(cls, system_prompt: str, messages: list[dict[str, Any]]) -> "History":
+        """从序列化数据恢复 History。"""
+        h = cls(system_prompt)
+        h._messages = list(messages)
+        return h
+
+    def update_system(self, system_prompt: str) -> None:
+        """热更新 system prompt。"""
+        self._system = make_system(system_prompt)
+
     def __len__(self) -> int:
         return len(self._messages)

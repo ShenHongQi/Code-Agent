@@ -142,9 +142,10 @@ def heal_orphans(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class ContextManager:
     """管理上下文窗口：估算、压缩触发、compaction 执行。"""
 
-    def __init__(self, provider=None):
+    def __init__(self, provider=None, memory_mgr=None):
         self.estimator = TokenEstimator()
         self._provider = provider
+        self._memory_mgr = memory_mgr
         self._soft_cap = min(
             int(0.75 * config.usable_context),
             120_000,
@@ -222,12 +223,23 @@ class ContextManager:
         if not self._provider:
             return self._fallback_summary(messages)
 
+        memory_instruction = ""
+        if self._memory_mgr:
+            memory_instruction = (
+                "\n\nIf the conversation contains long-term valuable project knowledge "
+                "(architecture decisions, conventions, known issues), output them at the end "
+                "as lines prefixed with [MEMORY], one fact per line. Example:\n"
+                "[MEMORY] 项目使用 pytest 作为测试框架\n"
+                "[MEMORY] 数据库迁移用 alembic\n"
+            )
+
         summary_prompt = (
             "Summarize the following conversation segment concisely. Preserve:\n"
             "- Files that were modified and what changed\n"
             "- Confirmed facts (test commands, file locations, etc.)\n"
             "- Rejected approaches and why\n"
-            "- Pending tasks\n\n"
+            "- Pending tasks\n"
+            f"{memory_instruction}\n"
             "Conversation:\n"
         )
         for msg in messages:
@@ -244,9 +256,22 @@ class ContextManager:
                 make_user(summary_prompt[:8000]),
             ]
             acc = stream_with_retry(self._provider, summary_messages, max_retries=2)
-            return acc.content or self._fallback_summary(messages)
+            summary = acc.content or self._fallback_summary(messages)
+            self._extract_memories(summary)
+            return summary
         except Exception:
             return self._fallback_summary(messages)
+
+    def _extract_memories(self, summary: str) -> None:
+        """从摘要中提取 [MEMORY] 标记行并写入项目记忆。"""
+        if not self._memory_mgr:
+            return
+        for line in summary.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[MEMORY]"):
+                entry = stripped[len("[MEMORY]"):].strip()
+                if entry:
+                    self._memory_mgr.append(entry, scope="project")
 
     def _fallback_summary(self, messages: list[dict[str, Any]]) -> str:
         """无 LLM 时的简单摘要。"""
