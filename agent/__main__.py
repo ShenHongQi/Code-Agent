@@ -166,7 +166,7 @@ def main() -> None:
     from agent.session import SessionManager
     from agent.ui import UI
     from agent.loop import run_loop
-    from agent.terminal import InputManager, Spinner, EscDetector, EscInterrupt
+    from agent.terminal import InputManager, EscDetector, EscInterrupt
 
     workspace = Workspace(config.workspace)
     registry = FileRegistry()
@@ -203,8 +203,6 @@ def main() -> None:
     memory_mgr.has_changed()
 
     ui = UI(stream=not config.no_stream)
-    spinner = Spinner()
-    ui.set_spinner(spinner)
     input_mgr = InputManager()
 
     ui.info(f"🔥 Megumin | model: {config.model} | workspace: {workspace.root}")
