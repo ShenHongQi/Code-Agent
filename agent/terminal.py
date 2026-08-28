@@ -1,4 +1,4 @@
-"""终端交互：readline 历史、Spinner 动画、ESC 检测。"""
+"""终端交互：readline 历史、Spinner 动画、ESC 检测、命令补全。"""
 
 from __future__ import annotations
 import os
@@ -28,18 +28,22 @@ class EscInterrupt(Exception):
 # ─── InputManager ───────────────────────────────────────────────────────────
 
 class InputManager:
-    """readline 集成 + 持久化历史 + 视觉化输入框。"""
+    """readline 集成 + 持久化历史 + 斜杠命令补全。"""
 
     def __init__(self):
         self._readline_available = False
+        self._commands: list[tuple[str, str]] = []  # [(name, description), ...]
         self._setup_readline()
+
+    def set_commands(self, commands: list[tuple[str, str]]) -> None:
+        """设置可用斜杠命令列表，用于自动补全。"""
+        self._commands = commands
 
     def _setup_readline(self) -> None:
         try:
             import readline
             self._readline = readline
 
-            # macOS libedit 兼容
             if "libedit" in (readline.__doc__ or ""):
                 readline.parse_and_bind("bind ^I rl_complete")
             else:
@@ -47,7 +51,6 @@ class InputManager:
 
             readline.set_history_length(HISTORY_SIZE)
 
-            # 加载历史
             if HISTORY_FILE.exists():
                 readline.read_history_file(str(HISTORY_FILE))
 
@@ -56,38 +59,256 @@ class InputManager:
             self._readline = None
 
     def styled_input(self, prefill: str = "", model: str = "") -> str:
-        """显示上下分隔线框住的输入区域，输入时即可见。"""
+        """显示上下分隔线框住的输入区域。检测 / 开头触发命令补全。"""
         width = shutil.get_terminal_size().columns
         sep = f"{ORANGE}{'─' * width}{RESET}"
 
-        # 画框架：顶线、空行（输入位置）、底线、模型
+        # 画框架
         sys.stdout.write(f"\n{sep}\n")
-        sys.stdout.write("\n")  # 输入行占位
+        sys.stdout.write("\n")
         sys.stdout.write(f"{sep}\n")
         model_line = f"{DIM}  model: {model}{RESET}" if model else ""
         if model_line:
             sys.stdout.write(f"{model_line}\n")
 
-        # 光标移回输入行：向上 2 行（底线+模型）或 1 行（仅底线）
         up = 3 if model else 2
         sys.stdout.write(f"\033[{up}A\r")
         sys.stdout.flush()
+
+        # 如果有 prefill 且以 / 开头，或者需要检测首字符
+        if prefill and prefill.startswith("/") and self._commands:
+            result = self._slash_input(prefill)
+            down = 2 if model else 1
+            sys.stdout.write(f"\033[{down}B\r")
+            sys.stdout.flush()
+            return result
 
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
         try:
-            user_input = input(f"{BOLD}{ORANGE}> {RESET}")
+            # 尝试 peek 第一个字符来检测 /
+            if not prefill and self._commands and sys.stdin.isatty() and os.name != "nt":
+                result = self._input_with_slash_detect(model)
+            else:
+                result = input(f"{BOLD}{ORANGE}> {RESET}")
         finally:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        # 输入完成后光标在底线位置，移到框架下方继续输出
         down = 2 if model else 1
         sys.stdout.write(f"\033[{down}B\r")
         sys.stdout.flush()
 
-        return user_input.strip()
+        return result.strip()
+
+    def _input_with_slash_detect(self, model: str) -> str:
+        """读取第一个字符，如果是 / 则进入命令补全模式。"""
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        # 显示提示符
+        sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
+        sys.stdout.flush()
+
+        try:
+            tty.setcbreak(fd)
+            first_char = sys.stdin.read(1)
+        except (termios.error, OSError, KeyboardInterrupt):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            raise EOFError()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        if first_char == "/":
+            return self._slash_input("/")
+
+        # 非 / 开头：用 readline 继续，prefill 第一个字符
+        if self._readline_available:
+            self._readline.set_startup_hook(
+                lambda: self._readline.insert_text(first_char)
+            )
+
+        try:
+            # 清除已输出的 "> " 和第一个字符的回显（raw mode 不会回显）
+            # 但我们需要重新绘制，因为 input() 会输出自己的 prompt
+            sys.stdout.write(f"\r\033[K")
+            sys.stdout.flush()
+            result = input(f"{BOLD}{ORANGE}> {RESET}")
+        finally:
+            if self._readline_available:
+                self._readline.set_startup_hook()
+
+        return result
+
+    def _slash_input(self, initial: str = "/") -> str:
+        """斜杠命令补全模式：实时下拉框 + 过滤。"""
+        import termios
+        import tty
+
+        if not sys.stdin.isatty() or os.name == "nt":
+            # 回退：普通输入
+            return input(f"{BOLD}{ORANGE}> {RESET}{initial}")
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        buffer = initial  # 包含 /
+        selected = 0
+        dropdown_lines = 0  # 当前下拉框占用行数
+
+        def _get_matches():
+            query = buffer[1:].lower()  # 去掉 /
+            if not query:
+                return self._commands[:]
+            return [(n, d) for n, d in self._commands if n.startswith(query)]
+
+        def _render():
+            nonlocal dropdown_lines
+            cols = shutil.get_terminal_size().columns
+
+            # 清除之前的下拉框
+            if dropdown_lines > 0:
+                # 移到下拉框第一行并清除
+                sys.stdout.write(f"\033[{dropdown_lines}B")
+                for _ in range(dropdown_lines):
+                    sys.stdout.write(f"\033[A\033[K")
+                sys.stdout.write(f"\033[A")  # 回到输入行
+
+            # 重绘输入行
+            sys.stdout.write(f"\r\033[K")
+            sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
+            sys.stdout.write(f"{BOLD}{ORANGE}{buffer}{RESET}")
+
+            # 绘制下拉框
+            matches = _get_matches()
+            if matches:
+                max_name = max(len(n) for n, _ in matches)
+                box_width = min(cols - 4, max_name + 30)
+
+                sys.stdout.write(f"\n")
+                sys.stdout.write(f"  {DIM}┌{'─' * box_width}┐{RESET}\n")
+
+                for i, (name, desc) in enumerate(matches):
+                    entry = f"/{name:<{max_name}}  {desc}"
+                    entry = entry[:box_width - 2]
+                    padding = " " * max(0, box_width - 2 - len(entry))
+
+                    if i == selected:
+                        sys.stdout.write(
+                            f"  {DIM}│{RESET} {BOLD}{ORANGE}❯ {entry}{padding}{RESET} {DIM}│{RESET}\n"
+                        )
+                    else:
+                        sys.stdout.write(
+                            f"  {DIM}│  {entry}{padding} │{RESET}\n"
+                        )
+
+                sys.stdout.write(f"  {DIM}└{'─' * box_width}┘{RESET}")
+
+                dropdown_lines = len(matches) + 2  # top border + items + bottom border
+
+                # 光标回到输入行
+                sys.stdout.write(f"\033[{dropdown_lines}A")
+                # 光标定位到输入内容末尾
+                sys.stdout.write(f"\r\033[{len(buffer) + 2}C")
+            else:
+                dropdown_lines = 0
+
+            sys.stdout.flush()
+
+        def _clear_dropdown():
+            if dropdown_lines > 0:
+                sys.stdout.write(f"\n")
+                for _ in range(dropdown_lines):
+                    sys.stdout.write(f"\033[K\n")
+                sys.stdout.write(f"\033[{dropdown_lines + 1}A")
+                sys.stdout.flush()
+
+        try:
+            tty.setcbreak(fd)
+            _render()
+
+            while True:
+                ch = sys.stdin.read(1)
+
+                if ch == "\x1b":
+                    # 转义序列
+                    import select
+                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                    if r:
+                        seq = sys.stdin.read(2)
+                        matches = _get_matches()
+                        if seq == "[A" and matches:  # 上
+                            selected = (selected - 1) % len(matches)
+                            _render()
+                        elif seq == "[B" and matches:  # 下
+                            selected = (selected + 1) % len(matches)
+                            _render()
+                    else:
+                        # 裸 ESC — 取消
+                        _clear_dropdown()
+                        sys.stdout.write(f"\r\033[K")
+                        sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
+                        sys.stdout.flush()
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        return ""
+
+                elif ch in ("\r", "\n"):
+                    matches = _get_matches()
+                    _clear_dropdown()
+                    if matches and selected < len(matches):
+                        result = "/" + matches[selected][0]
+                    else:
+                        result = buffer
+                    # 显示最终选择
+                    sys.stdout.write(f"\r\033[K")
+                    sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    return result
+
+                elif ch == "\x7f" or ch == "\x08":  # Backspace
+                    if len(buffer) > 1:
+                        buffer = buffer[:-1]
+                        selected = 0
+                        _render()
+                    elif len(buffer) == 1:
+                        # 退到空，取消命令模式
+                        _clear_dropdown()
+                        sys.stdout.write(f"\r\033[K")
+                        sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
+                        sys.stdout.flush()
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        return ""
+
+                elif ch == "\x03":  # Ctrl+C
+                    _clear_dropdown()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    raise KeyboardInterrupt()
+
+                elif ch == "\t":  # Tab — 自动填充选中项
+                    matches = _get_matches()
+                    if matches and selected < len(matches):
+                        buffer = "/" + matches[selected][0]
+                        _render()
+
+                elif ch.isprintable():
+                    buffer += ch
+                    selected = 0
+                    _render()
+
+        except (termios.error, OSError):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            return buffer
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except (termios.error, OSError):
+                pass
 
     def save_history(self) -> None:
         if self._readline_available:
@@ -129,11 +350,10 @@ class Spinner:
         self._thread.start()
 
     def pause(self) -> None:
-        """暂停 spinner 并清除其显示行。"""
         if not self._running:
             return
         self._paused.set()
-        time.sleep(0.05)  # 等待渲染循环感知
+        time.sleep(0.05)
         self._clear_line()
 
     def resume(self, label: str = "") -> None:
@@ -243,19 +463,16 @@ class EscDetector:
                     break
 
                 if ch == "\x1b":
-                    # 区分裸 ESC 和 ANSI 转义序列
                     try:
                         r, _, _ = select.select([sys.stdin], [], [], 0.05)
                     except (OSError, ValueError):
                         break
                     if r:
-                        # 是转义序列的一部分（如方向键），消耗剩余字节
                         try:
                             sys.stdin.read(2)
                         except (OSError, ValueError):
                             pass
                     else:
-                        # 裸 ESC
                         self.event.set()
                         break
 
@@ -263,15 +480,11 @@ class EscDetector:
 # ─── InteractiveSelector ────────────────────────────────────────────────────
 
 def select_menu(items: list[str], title: str = "选择:") -> int | None:
-    """交互式上下键选择菜单。返回选中索引，ESC/q 取消返回 None。
-
-    需要 Unix TTY 环境（termios）。
-    """
+    """交互式上下键选择菜单。返回选中索引，ESC/q 取消返回 None。"""
     if not items:
         return None
 
     if not sys.stdin.isatty() or os.name == "nt":
-        # 非 TTY 回退：简单数字选择
         sys.stdout.write(f"{BOLD}{title}{RESET}\n")
         for i, item in enumerate(items):
             sys.stdout.write(f"  {i + 1}. {item}\n")
@@ -292,9 +505,8 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
     selected = 0
     total = len(items)
 
-    # 确保每个选项只占一行：去掉换行 + 截断到终端宽度
     cols = shutil.get_terminal_size().columns
-    max_item_width = cols - 6  # 留出 "  ❯ " 前缀宽度
+    max_item_width = cols - 6
     display_items = []
     for item in items:
         clean = item.replace("\n", " ").replace("\r", "")
@@ -305,12 +517,11 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
 
-    # 渲染行数固定 = title(1) + items(total)
     render_lines = total + 1
 
     def _render():
-        sys.stdout.write(f"\033[{render_lines}A")  # 回到标题行
-        sys.stdout.write("\033[J")  # 清除到底部
+        sys.stdout.write(f"\033[{render_lines}A")
+        sys.stdout.write("\033[J")
         sys.stdout.write(f"{BOLD}{title}{RESET}\n")
         for i, item in enumerate(display_items):
             if i == selected:
@@ -322,7 +533,6 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
     try:
         tty.setcbreak(fd)
 
-        # 首次渲染
         sys.stdout.write(f"{BOLD}{title}{RESET}\n")
         for i, item in enumerate(display_items):
             if i == selected:
@@ -336,10 +546,10 @@ def select_menu(items: list[str], title: str = "选择:") -> int | None:
 
             if ch == "\x1b":
                 seq = sys.stdin.read(2)
-                if seq == "[A":  # 上
+                if seq == "[A":
                     selected = (selected - 1) % total
                     _render()
-                elif seq == "[B":  # 下
+                elif seq == "[B":
                     selected = (selected + 1) % total
                     _render()
                 elif seq == "" or seq[0] != "[":

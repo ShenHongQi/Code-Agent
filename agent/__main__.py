@@ -181,6 +181,10 @@ def main() -> None:
     ui = UI(stream=not config.no_stream)
     input_mgr = InputManager()
 
+    # 注册命令列表供输入补全
+    from agent.commands import get_all_commands
+    input_mgr.set_commands([(c.name, c.description) for c in get_all_commands()])
+
     from agent.banner import render_banner
     print(render_banner(model=config.model, workspace=str(workspace.root)))
 
