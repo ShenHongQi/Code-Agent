@@ -55,10 +55,23 @@ class InputManager:
         except (ImportError, OSError):
             self._readline = None
 
-    def styled_input(self, prefill: str = "") -> str:
-        """显示视觉化输入框并读取用户输入。"""
+    def styled_input(self, prefill: str = "", model: str = "") -> str:
+        """显示上下分隔线框住的输入区域，输入时即可见。"""
         width = shutil.get_terminal_size().columns
-        print(f"\n{GREEN}{'─' * width}{RESET}")
+        sep = f"{GREEN}{'─' * width}{RESET}"
+
+        # 画框架：顶线、空行（输入位置）、底线、模型
+        sys.stdout.write(f"\n{sep}\n")
+        sys.stdout.write("\n")  # 输入行占位
+        sys.stdout.write(f"{sep}\n")
+        model_line = f"{DIM}  model: {model}{RESET}" if model else ""
+        if model_line:
+            sys.stdout.write(f"{model_line}\n")
+
+        # 光标移回输入行：向上 2 行（底线+模型）或 1 行（仅底线）
+        up = 3 if model else 2
+        sys.stdout.write(f"\033[{up}A\r")
+        sys.stdout.flush()
 
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
@@ -69,15 +82,12 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        return user_input.strip()
+        # 输入完成后光标在底线位置，移到框架下方继续输出
+        down = 2 if model else 1
+        sys.stdout.write(f"\033[{down}B\r")
+        sys.stdout.flush()
 
-    @staticmethod
-    def print_separator(model: str = "") -> None:
-        """打印底部分隔线和模型信息。"""
-        width = shutil.get_terminal_size().columns
-        print(f"{GREEN}{'─' * width}{RESET}")
-        if model:
-            print(f"{DIM}  model: {model}{RESET}")
+        return user_input.strip()
 
     def save_history(self) -> None:
         if self._readline_available:

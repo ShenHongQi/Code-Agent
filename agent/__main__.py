@@ -232,7 +232,7 @@ def main() -> None:
     prefill = ""
     while True:
         try:
-            user_input = input_mgr.styled_input(prefill=prefill)
+            user_input = input_mgr.styled_input(prefill=prefill, model=config.model)
             prefill = ""
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
@@ -249,7 +249,6 @@ def main() -> None:
             break
 
         # Run with ESC detection
-        input_mgr.print_separator(model=config.model)
         esc_detector = EscDetector()
         esc_detector.start()
         try:
