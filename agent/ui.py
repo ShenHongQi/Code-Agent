@@ -48,7 +48,7 @@ class UI:
         sys.stdout.flush()
 
     def assistant_start(self) -> None:
-        sys.stdout.write(f"\n{BOLD}{CYAN}⏺ Assistant{RESET}\n")
+        sys.stdout.write(f"{BOLD}{CYAN}⏺ Assistant{RESET}\n")
         sys.stdout.flush()
         self._in_stream = True
         self._first_token = True

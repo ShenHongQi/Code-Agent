@@ -55,7 +55,7 @@ class InputManager:
         except (ImportError, OSError):
             self._readline = None
 
-    def styled_input(self, prefill: str = "") -> str:
+    def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示视觉化输入框并读取用户输入。"""
         width = shutil.get_terminal_size().columns
         line = "─" * width
@@ -73,6 +73,8 @@ class InputManager:
                 self._readline.set_startup_hook()
 
         sys.stdout.write(f"{GREEN}{line}{RESET}\n")
+        if model:
+            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
         sys.stdout.flush()
 
         return user_input.strip()

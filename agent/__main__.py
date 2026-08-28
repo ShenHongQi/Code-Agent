@@ -232,7 +232,7 @@ def main() -> None:
     prefill = ""
     while True:
         try:
-            user_input = input_mgr.styled_input(prefill=prefill)
+            user_input = input_mgr.styled_input(prefill=prefill, model=config.model)
             prefill = ""
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
