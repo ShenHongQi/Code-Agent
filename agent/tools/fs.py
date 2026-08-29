@@ -1,6 +1,8 @@
 """文件系统工具：read_file / write_file / edit_file。"""
 
 from __future__ import annotations
+import os
+import tempfile
 from pathlib import Path
 
 from agent.tools import tool, ToolResult
@@ -8,6 +10,22 @@ from agent.workspace import Workspace, FileRegistry, WorkspaceError
 
 _workspace: Workspace | None = None
 _registry: FileRegistry | None = None
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Write via temp file + rename for crash safety."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        os.write(fd, data)
+        os.close(fd)
+        Path(tmp).replace(path)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def init(workspace: Workspace, registry: FileRegistry) -> None:
@@ -82,7 +100,7 @@ def write_file(path: str, content: str) -> ToolResult:
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         raw = content.encode("utf-8")
-        resolved.write_bytes(raw)
+        _atomic_write(resolved, raw)
         _registry.update_after_write(resolved, raw)
     except Exception as e:
         return ToolResult(False, f"Error writing file: {e}")
@@ -135,7 +153,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> ToolResult:
 
     new_content = content.replace(old_string, new_string, 1)
     new_raw = new_content.encode("utf-8")
-    resolved.write_bytes(new_raw)
+    _atomic_write(resolved, new_raw)
     _registry.update_after_write(resolved, new_raw)
 
     old_lines = old_string.count("\n") + 1
@@ -180,7 +198,9 @@ def rename_file(old_path: str, new_path: str) -> ToolResult:
     assert _workspace and _registry
     try:
         resolved_old = _workspace.resolve(old_path)
+        _workspace.check_sensitive(resolved_old)
         resolved_new = _workspace.resolve(new_path)
+        _workspace.check_sensitive(resolved_new)
     except WorkspaceError as e:
         return ToolResult(False, f"Error: {e}")
 
@@ -238,11 +258,18 @@ def _walk_dir(root: Path, current: Path, max_depth: int, level: int, lines: list
         if entry.name.startswith(".") and level == 0:
             continue
         indent = "  " * level
+        if entry.is_symlink():
+            target = str(entry.resolve()) if entry.exists() else "broken"
+            lines.append(f"{indent}🔗 {entry.name} -> {target}")
+            continue
         if entry.is_dir():
             lines.append(f"{indent}📁 {entry.name}/")
             _walk_dir(root, entry, max_depth, level + 1, lines)
         else:
-            size = entry.stat().st_size
+            try:
+                size = entry.lstat().st_size
+            except OSError:
+                size = 0
             if size > 1024 * 1024:
                 size_str = f"{size / 1024 / 1024:.1f}MB"
             elif size > 1024:

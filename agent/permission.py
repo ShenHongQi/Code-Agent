@@ -12,10 +12,11 @@ class PermissionDenied(Exception):
 # ─── 绝对禁止 ───────────────────────────────────────────────────────────────
 
 BLOCKED_PATTERNS = [
-    r"\brm\s+-[rf]*r[f]*\s+/\s*$",
-    r"\brm\s+-[rf]*r[f]*\s+~/?\s*$",
+    r"\brm\s+-[rf]*r[f]*\s+/",       # rm -rf / (any suffix)
+    r"\brm\s+-[rf]*r[f]*\s+~/",      # rm -rf ~/
+    r"\brm\s+-[rf]*r[f]*\s+/\*",     # rm -rf /*
     r"\bdd\b.*\bof=/dev/",
-    r":\(\)\s*\{\s*:\|:\s*&\s*\}",  # fork bomb
+    r":\(\)\s*\{.*:\|:.*&.*\}",      # fork bomb (relaxed spacing)
     r"\bgit\s+push\s+.*--force\b",
     r"\bgit\s+push\s+-f\b",
     r"\bcurl\b.*\|\s*(ba)?sh\b",
@@ -23,7 +24,7 @@ BLOCKED_PATTERNS = [
     r"\bsudo\s+rm\b",
     r"\bmkfs\b",
     r"\bformat\s+[Cc]:",
-    r"\b:(){ :|:& };:",
+    r"\beval\b.*\brm\b",             # eval "rm ..."
 ]
 
 # ─── 自动允许 ───────────────────────────────────────────────────────────────
@@ -104,6 +105,9 @@ def get_permission_state() -> PermissionState:
 
 # ─── 分类逻辑 ───────────────────────────────────────────────────────────────
 
+_CHAIN_RE = re.compile(r'[|;&]|&&|\|\||`|\$\(')
+
+
 def classify_command(command: str) -> str:
     """分类命令为 allow / confirm / block。"""
     # 1. 绝对禁止
@@ -111,10 +115,11 @@ def classify_command(command: str) -> str:
         if re.search(pattern, command):
             return "block"
 
-    # 2. 安全命令
-    for pattern in SAFE_PATTERNS:
-        if re.search(pattern, command):
-            return "allow"
+    # 2. 安全命令（含管道/分号/子shell的复合命令不走 safe 路径）
+    if not _CHAIN_RE.search(command):
+        for pattern in SAFE_PATTERNS:
+            if re.search(pattern, command):
+                return "allow"
 
     # 3. 上下文感知：rm 可再生目标
     rm_match = re.search(r"\brm\s+.*?[-/]?(\S+)\s*$", command)

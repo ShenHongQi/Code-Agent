@@ -91,9 +91,15 @@ class SessionManager:
 
     @staticmethod
     def _trim_messages(messages: list[dict[str, Any]], keep_turns: int) -> list[dict[str, Any]]:
-        """保留最后 N 轮用户消息及其后续消息。"""
+        """保留最后 N 轮用户消息及其后续消息，不破坏 tool_call/tool 配对。"""
         user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
         if len(user_indices) <= keep_turns:
             return messages
         start = user_indices[-keep_turns]
+        # Walk backwards from start to avoid cutting inside a tool_call/tool pair
+        while start > 0 and messages[start].get("role") == "tool":
+            start -= 1
+        # If we landed on an assistant with tool_calls, include it
+        if start > 0 and messages[start].get("role") == "assistant" and messages[start].get("tool_calls"):
+            pass  # keep start here — the assistant + its tool results are included
         return messages[start:]

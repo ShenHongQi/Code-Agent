@@ -145,6 +145,13 @@ def run_loop(
         except LLMError as e:
             ui.error(str(e))
             return LoopResult("fatal_error", iteration)
+        except (KeyboardInterrupt, EscInterrupt):
+            ui.assistant_end()
+            raise
+        except Exception as e:
+            ui.assistant_end()
+            ui.error(f"Unexpected error: {e}")
+            return LoopResult("fatal_error", iteration)
 
         # Calibrate token estimator with actual usage
         if acc.usage.get("prompt_tokens"):
@@ -162,7 +169,8 @@ def run_loop(
         if acc.is_natural_stop:
             # 纠偏：如果 assistant 只输出文本且包含代码块/命令，提醒它调用工具
             if acc.content and _looks_like_missed_tool_call(acc.content) and iteration < max_iter - 1:
-                ui.show_thinking(acc.content)
+                if not ui._streaming_active:
+                    ui.show_thinking(acc.content)
                 if thinking_log is not None:
                     thinking_log.append(acc.content)
                 nudge = (
@@ -173,15 +181,17 @@ def run_loop(
                 history.append(make_user(nudge))
                 continue
 
-            # 最终回答：完整 Markdown 渲染
-            ui.show_response(acc.content or "")
+            # 最终回答：流式已输出则跳过重复渲染
+            if not ui._streaming_active:
+                ui.show_response(acc.content or "")
             ui.show_thinking_summary()
             return LoopResult("natural_stop", iteration)
 
         # Process tool calls → 中间思考
         if acc.has_tool_calls:
             if acc.content:
-                ui.show_thinking(acc.content)
+                if not ui._streaming_active:
+                    ui.show_thinking(acc.content)
                 if thinking_log is not None:
                     thinking_log.append(acc.content)
             try:
@@ -208,7 +218,7 @@ def _looks_like_missed_tool_call(content: str) -> bool:
         bool(re.search(r"我将执行|让我[们来]|接下来我会|我会运行", content)),
         bool(re.search(r"执行以下命令|运行以下", content)),
     ]
-    return sum(indicators) >= 1
+    return sum(indicators) >= 2
 
 
 def _detect_stuck(history: History) -> bool:
@@ -259,11 +269,13 @@ def _stream_step(
     tools_schema: list[dict[str, Any]],
     ui: UI,
 ) -> StreamAccumulator:
-    """执行一次 LLM 调用（流式），静默缓冲（spinner 由调用方控制）。"""
+    """执行一次 LLM 调用（流式），实时输出内容 token。"""
     acc = StreamAccumulator()
 
     for chunk in provider.stream_chat(messages, tools_schema):
-        acc.feed(chunk)
+        new_text = acc.feed(chunk)
+        if new_text:
+            ui.stream_token(new_text)
 
     return acc
 

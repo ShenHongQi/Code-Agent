@@ -25,7 +25,7 @@ def _classify_error(status_code: int, body: str) -> LLMError:
         return ContextLengthExceeded(
             f"Context length exceeded: {body}", status_code, retryable=False
         )
-    if status_code in (429, 408, 500, 502, 503, 504):
+    if status_code in (0, 429, 408, 500, 502, 503, 504):
         return LLMError(f"Retryable error {status_code}: {body}", status_code, retryable=True)
     return LLMError(f"Fatal error {status_code}: {body}", status_code, retryable=False)
 

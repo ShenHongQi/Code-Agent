@@ -90,8 +90,9 @@ class RawProvider(Provider):
             raise LLMError(f"Connection error: {e}", 0, retryable=True) from e
 
     def _parse_sse(self, resp) -> Iterator[dict[str, Any]]:
-        """手写 SSE 行解析。"""
+        """SSE 行解析（符合规范：空行分隔事件，多行 data 拼接）。"""
         buffer = ""
+        data_lines: list[str] = []
         for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace")
             buffer += line
@@ -100,12 +101,28 @@ class RawProvider(Provider):
                 text_line, buffer = buffer.split("\n", 1)
                 text_line = text_line.rstrip("\r")
 
-                if text_line.startswith("data: "):
-                    payload = text_line[6:]
-                    if payload.strip() == "[DONE]":
-                        return
-                    try:
-                        chunk = json.loads(payload)
-                        yield chunk
-                    except json.JSONDecodeError:
-                        continue
+                if not text_line:
+                    # Empty line = event boundary, dispatch accumulated data
+                    if data_lines:
+                        payload = "\n".join(data_lines)
+                        data_lines.clear()
+                        if payload.strip() == "[DONE]":
+                            return
+                        try:
+                            yield json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                elif text_line.startswith("data: "):
+                    data_lines.append(text_line[6:])
+                elif text_line.startswith("data:"):
+                    data_lines.append(text_line[5:])
+                # Ignore event:, id:, retry: fields per spec
+
+        # Flush remaining data if stream ends without trailing newline
+        if data_lines:
+            payload = "\n".join(data_lines)
+            if payload.strip() != "[DONE]":
+                try:
+                    yield json.loads(payload)
+                except json.JSONDecodeError:
+                    pass

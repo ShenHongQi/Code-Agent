@@ -324,7 +324,7 @@ def _convert_cursorrules(text: str, source_url: str) -> str:
         f"name: {name}\n"
         f"description: 从 cursorrules 导入\n"
         f"aliases: []\n"
-        f"auto_approve: true\n"
+        f"auto_approve: false\n"
         f"---\n\n"
         f"{text.strip()}\n\n"
         f"用户需求: {{args}}\n"

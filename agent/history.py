@@ -49,13 +49,13 @@ class History:
             self.append(make_tool(tc_id, "Interrupted before execution."))
 
     def _find_orphan_tool_call_ids(self) -> list[str]:
-        """找出有 tool_call 但缺对应 tool 结果的 id。"""
-        called: set[str] = set()
+        """找出有 tool_call 但缺对应 tool 结果的 id（保持原始顺序）。"""
+        called: list[str] = []
         answered: set[str] = set()
         for msg in self._messages:
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
-                    called.add(tc["id"])
+                    called.append(tc["id"])
             elif msg.get("role") == "tool":
                 answered.add(msg["tool_call_id"])
         return [tc_id for tc_id in called if tc_id not in answered]

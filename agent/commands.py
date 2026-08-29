@@ -19,6 +19,8 @@ class CommandContext:
     memory_mgr: Any = None
     _resume_result: Any = None  # /resume 命令写入 (new_history, new_meta)
     _skill_executed: bool = False  # skill 执行后标记（用于保存会话）
+    _goal_set: str | None = None  # /goal 命令设置自动目标
+    _plan_request: str | None = None  # /plan 命令设置规划请求
 
 
 @dataclass
@@ -257,7 +259,41 @@ def _install_skill(ctx: CommandContext, url: str) -> None:
         ctx.ui.error(f"✗ {message}")
 
 
+def _cmd_goal(ctx: CommandContext, args: str) -> None:
+    """设定自动目标，agent 自主迭代完成。"""
+    if not args:
+        # 显示当前目标状态
+        from agent.goal import GoalManager
+        ctx.ui.info("用法: /goal <目标描述>  — 设定目标并自动执行")
+        ctx.ui.info("      /goal clear       — 清除当前目标")
+        return
+
+    if args.strip().lower() == "clear":
+        ctx._goal_set = "__clear__"
+        ctx.ui.info("🎯 目标已清除，回到交互模式。")
+        return
+
+    ctx._goal_set = args.strip()
+    ctx.ui.info(f"🎯 目标已设定: {args.strip()}")
+    ctx.ui.info(f"   进入自动模式，agent 将自主工作直到完成。")
+    ctx.ui.info(f"   按 ESC 可中断，/goal clear 取消目标。")
+
+
+def _cmd_plan(ctx: CommandContext, args: str) -> None:
+    """进入设计方案模式：先规划再执行。"""
+    if not args:
+        ctx.ui.info("用法: /plan <需求描述>  — 进入方案设计模式")
+        ctx.ui.info("      agent 将先分析代码、输出方案，待你确认后再执行。")
+        return
+
+    ctx._plan_request = args.strip()
+    ctx.ui.info(f"📋 进入方案设计模式: {args.strip()}")
+    ctx.ui.info(f"   agent 将分析代码并输出实现方案，等待你的确认。")
+
+
 register("help", _cmd_help, "显示所有可用命令", aliases=["h", "?"])
 register("think", _cmd_think, "展开上一轮中间思考", aliases=["thinking"])
 register("resume", _cmd_resume, "恢复历史会话", aliases=["r"])
 register("skill", _cmd_skill, "执行预定义工作流", aliases=["s"])
+register("goal", _cmd_goal, "自动目标模式", aliases=["g"])
+register("plan", _cmd_plan, "设计方案模式", aliases=["p"])

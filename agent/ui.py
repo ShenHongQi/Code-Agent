@@ -117,11 +117,35 @@ class UI:
 
     def assistant_start(self) -> None:
         """模型开始响应：显示动态旋转指示器。"""
+        self._streaming_active = False
+        self._md_renderer = None
         self._status.start("Assistant", "thinking")
 
     def assistant_end(self) -> None:
         """模型响应结束：停止指示器。"""
         self._status.stop()
+        if self._streaming_active and self._md_renderer:
+            tail = self._md_renderer.flush()
+            if tail:
+                sys.stdout.write(tail)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._streaming_active = False
+
+    def stream_token(self, token: str) -> None:
+        """流式输出一个 token（实时 Markdown 渲染）。"""
+        if not self._stream:
+            return
+        if not self._streaming_active:
+            self._status.stop()
+            sys.stdout.write(f"\n{BOLD}{ORANGE}● Assistant{RESET}\n")
+            sys.stdout.flush()
+            self._md_renderer = StreamingMarkdownRenderer()
+            self._streaming_active = True
+        rendered = self._md_renderer.feed(token)
+        if rendered:
+            sys.stdout.write(rendered)
+            sys.stdout.flush()
 
     def show_thinking(self, content: str, max_lines: int = THINKING_MAX_LINES) -> None:
         """显示中间思考内容：DIM 淡化 + 截断。"""

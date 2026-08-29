@@ -41,7 +41,8 @@ class BackgroundProc:
     command: str
     process: subprocess.Popen
     started_at: float = field(default_factory=time.time)
-    _buffer: deque = field(default_factory=lambda: deque(maxlen=512))
+    _buffer: deque = field(default_factory=deque)
+    _buffer_bytes: int = 0
     _thread: threading.Thread | None = None
 
     def start_reader(self) -> None:
@@ -54,7 +55,12 @@ class BackgroundProc:
             chunk = self.process.stdout.read(4096)
             if not chunk:
                 break
-            self._buffer.append(chunk.decode("utf-8", errors="replace"))
+            text = chunk.decode("utf-8", errors="replace")
+            self._buffer.append(text)
+            self._buffer_bytes += len(text)
+            while self._buffer_bytes > RING_BUFFER_SIZE and self._buffer:
+                evicted = self._buffer.popleft()
+                self._buffer_bytes -= len(evicted)
 
     @property
     def alive(self) -> bool:
@@ -79,7 +85,10 @@ class BackgroundProc:
                 pass
             time.sleep(0.5)
             if self.alive:
-                self.process.kill()
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except OSError:
+                    self.process.kill()
 
 
 @tool

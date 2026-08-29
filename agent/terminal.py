@@ -210,10 +210,10 @@ class InputManager:
             return [(n, d) for n, d in self._commands if n.startswith(query)]
 
         def _read_key() -> str:
-            """读取一个按键（处理多字节 escape sequence）。
+            """读取一个按键（处理多字节 UTF-8 和 escape sequence）。
 
             返回:
-              普通字符 → 该字符 (如 'a', '/', '\\r')
+              普通字符 → 该字符 (如 'a', '/', '请')
               方向键   → '[A', '[B', '[C', '[D'
               裸 ESC   → 'ESC'
               其他转义  → 'ESC'
@@ -224,6 +224,22 @@ class InputManager:
             ch = b[0]
 
             if ch != 0x1b:
+                # UTF-8 多字节序列：根据首字节判断还需读几个字节
+                if ch >= 0xC0:
+                    if ch < 0xE0:
+                        remaining = 1
+                    elif ch < 0xF0:
+                        remaining = 2
+                    else:
+                        remaining = 3
+                    data = b
+                    while remaining > 0:
+                        extra = os.read(fd, 1)
+                        if not extra:
+                            break
+                        data += extra
+                        remaining -= 1
+                    return data.decode("utf-8", errors="replace")
                 return b.decode("utf-8", errors="replace")
 
             # 读到 \x1b，用非阻塞读检查是否有后续字节

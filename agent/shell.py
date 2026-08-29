@@ -70,7 +70,13 @@ class ShellRunner:
                 os.killpg(proc.pid, signal.SIGTERM)
             except OSError:
                 pass
-            proc.kill()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
 
         reader.join(timeout=5)
         output = b"".join(buffer).decode("utf-8", errors="replace")

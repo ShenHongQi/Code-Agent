@@ -54,14 +54,20 @@ class TokenEstimator:
 
         return tokens
 
-    def estimate_messages(self, messages: list[dict[str, Any]]) -> int:
-        return sum(self.estimate_message(m) for m in messages)
+    def estimate_messages(self, messages: list[dict[str, Any]], tools_schema: list[dict[str, Any]] | None = None) -> int:
+        total = sum(self.estimate_message(m) for m in messages)
+        if tools_schema:
+            total += self.estimate_tools_schema(tools_schema)
+        return total
+
+    def estimate_tools_schema(self, tools: list[dict[str, Any]]) -> int:
+        return self.estimate(json.dumps(tools, ensure_ascii=False))
 
     def calibrate(self, estimated: int, actual: int) -> None:
         """用服务端返回的 usage.prompt_tokens 校准。"""
         if estimated <= 0 or actual <= 0:
             return
-        ratio = actual / estimated
+        ratio = max(0.5, min(2.0, actual / estimated))
         self._calibration_factor = (
             EMA_ALPHA * ratio + (1 - EMA_ALPHA) * self._calibration_factor
         )
@@ -89,11 +95,16 @@ def find_safe_cut_point(messages: list[dict[str, Any]], target_idx: int) -> int:
         # At an assistant message: check if it has tool_calls
         if msg.get("role") == "assistant":
             if not msg.get("tool_calls"):
-                # No tool_calls, safe to cut before this
                 return idx
-            # Has tool_calls: need to skip past all its tool results
+            # Has tool_calls: skip past all contiguous tool results
             num_calls = len(msg["tool_calls"])
-            idx += 1 + num_calls  # skip assistant + its tool results
+            idx += 1
+            skipped = 0
+            while idx < n and skipped < num_calls:
+                if messages[idx].get("role") != "tool":
+                    break
+                idx += 1
+                skipped += 1
             continue
         idx += 1
 
@@ -114,17 +125,27 @@ def heal_orphans(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             answered.add(msg.get("tool_call_id", ""))
 
     # Find orphan tool_calls (called but not answered)
-    result = list(messages)
     orphan_ids = [tc_id for tc_id in called if tc_id not in answered]
 
     if orphan_ids:
-        # Append placeholder tool results
+        # Group orphans by their assistant message index, insert after it
+        by_assistant: dict[int, list[str]] = {}
         for tc_id in orphan_ids:
-            result.append({
-                "role": "tool",
-                "tool_call_id": tc_id,
-                "content": "[Context compacted; original result unavailable]",
-            })
+            idx = called[tc_id]
+            by_assistant.setdefault(idx, []).append(tc_id)
+
+        result = []
+        for i, msg in enumerate(messages):
+            result.append(msg)
+            if i in by_assistant:
+                for tc_id in by_assistant[i]:
+                    result.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": "[Context compacted; original result unavailable]",
+                    })
+    else:
+        result = list(messages)
 
     # Find orphan tool messages (answered but no matching call in visible history)
     visible_call_ids = set(called.keys())

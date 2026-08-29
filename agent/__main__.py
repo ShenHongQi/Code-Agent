@@ -143,6 +143,7 @@ def main() -> None:
     from agent.ui import UI
     from agent.terminal import InputManager, EscDetector, EscInterrupt
     from agent.commands import CommandContext, dispatch as cmd_dispatch
+    from agent.goal import GoalManager, PlanManager
 
     workspace = Workspace(config.workspace)
     registry = FileRegistry()
@@ -181,6 +182,10 @@ def main() -> None:
     ui = UI(stream=not config.no_stream)
     input_mgr = InputManager()
 
+    # Goal & Plan managers
+    goal_mgr = GoalManager()
+    plan_mgr = PlanManager()
+
     # 注册命令列表供输入补全
     from agent.commands import get_all_commands
     input_mgr.set_commands([(c.name, c.description) for c in get_all_commands()])
@@ -205,6 +210,103 @@ def main() -> None:
     thinking_history: list[str] = []
 
     while True:
+        # ── 自动目标模式：无需等待用户输入 ──
+        if goal_mgr.active:
+            auto_input = None
+            if goal_mgr.iterations == 0:
+                auto_input = goal_mgr.build_initial_prompt()
+            else:
+                auto_input = goal_mgr.build_continue_prompt()
+
+            thinking_history.clear()
+            esc_detector = EscDetector()
+            esc_detector.start()
+            try:
+                result = _run_turn_with_result(
+                    auto_input, history, provider, ui, memory_mgr,
+                    str(workspace.root), esc_detector.event, thinking_history
+                )
+                if not goal_mgr.should_auto_continue(result, history):
+                    ui.info(f"\n🎯 目标完成或已达自动迭代上限 ({goal_mgr.iterations} 轮)。")
+                    goal_mgr.clear()
+            except EscInterrupt:
+                ui.warning("\n⚠ 目标执行被中断 (ESC)。目标已暂停，输入 /goal clear 取消或继续对话。")
+                goal_mgr.clear()
+            except KeyboardInterrupt:
+                history.seal_pending_tool_calls()
+                ui.warning("\n目标执行被中断。")
+                goal_mgr.clear()
+            finally:
+                esc_detector.stop()
+
+            session_meta["turns"] = session_meta.get("turns", 0) + 1
+            _save_session(session_mgr, history, session_meta)
+            continue
+
+        # ── 方案模式等待确认 ──
+        if plan_mgr.phase == "awaiting_approval":
+            try:
+                user_input = input_mgr.styled_input(
+                    prefill="", model=f"{config.model} [方案确认]"
+                )
+            except (EOFError, KeyboardInterrupt):
+                plan_mgr.reject()
+                print("\n方案已取消。")
+                continue
+
+            lower = user_input.strip().lower()
+            if lower in ("y", "yes", "确认", "ok", "执行", "批准", "approve"):
+                plan_mgr.approve()
+                ui.info("✅ 方案已批准，开始执行…")
+                thinking_history.clear()
+                esc_detector = EscDetector()
+                esc_detector.start()
+                try:
+                    _run_turn(
+                        plan_mgr.build_execution_prompt(), history, provider, ui,
+                        memory_mgr, str(workspace.root), esc_detector.event, thinking_history
+                    )
+                except EscInterrupt:
+                    ui.warning("\n⚠ 执行中断 (ESC)。")
+                except KeyboardInterrupt:
+                    history.seal_pending_tool_calls()
+                    ui.warning("\n执行中断。")
+                finally:
+                    esc_detector.stop()
+                plan_mgr.finish()
+                session_meta["turns"] = session_meta.get("turns", 0) + 1
+                _save_session(session_mgr, history, session_meta)
+                continue
+            elif lower in ("n", "no", "取消", "cancel", "reject", "拒绝"):
+                plan_mgr.reject()
+                ui.info("❌ 方案已取消。")
+                continue
+            else:
+                # 用户提供修改意见，追加到对话让 agent 修订方案
+                thinking_history.clear()
+                esc_detector = EscDetector()
+                esc_detector.start()
+                revision_prompt = (
+                    f"用户对方案有修改意见:\n{user_input}\n\n"
+                    f"请根据意见修订方案，输出修改后的完整方案。"
+                )
+                try:
+                    _run_turn(
+                        revision_prompt, history, provider, ui,
+                        memory_mgr, str(workspace.root), esc_detector.event, thinking_history
+                    )
+                except (EscInterrupt, KeyboardInterrupt):
+                    plan_mgr.reject()
+                    ui.warning("\n方案修订中断。")
+                finally:
+                    esc_detector.stop()
+                # 仍在等待确认
+                ui.info("\n📋 方案已修订。输入 y 执行 / n 取消 / 或继续提修改意见:")
+                session_meta["turns"] = session_meta.get("turns", 0) + 1
+                _save_session(session_mgr, history, session_meta)
+                continue
+
+        # ── 正常交互模式 ──
         try:
             user_input = input_mgr.styled_input(prefill=prefill, model=config.model)
             prefill = ""
@@ -241,6 +343,46 @@ def main() -> None:
             if ctx._resume_result is not None:
                 history, session_meta = ctx._resume_result
 
+            # /goal 设置目标
+            if ctx._goal_set is not None:
+                if ctx._goal_set == "__clear__":
+                    goal_mgr.clear()
+                else:
+                    goal_mgr.set_goal(ctx._goal_set)
+
+            # /plan 设置规划请求
+            if ctx._plan_request is not None:
+                plan_mgr.start(ctx._plan_request)
+                thinking_history.clear()
+                esc_detector = EscDetector()
+                esc_detector.start()
+                # 规划阶段只允许读取工具
+                plan_read_tools = {
+                    "read_file", "glob", "grep", "list_dir",
+                    "view_diff", "proc_status", "web_fetch",
+                    "memory_read", "todo_read",
+                }
+                try:
+                    _run_turn(
+                        plan_mgr.build_planning_prompt(), history, provider, ui,
+                        memory_mgr, str(workspace.root), esc_detector.event, thinking_history,
+                        allowed_tools=plan_read_tools,
+                    )
+                except EscInterrupt:
+                    plan_mgr.reject()
+                    ui.warning("\n⚠ 规划中断。")
+                except KeyboardInterrupt:
+                    history.seal_pending_tool_calls()
+                    plan_mgr.reject()
+                    ui.warning("\n规划中断。")
+                else:
+                    plan_mgr.move_to_approval()
+                    ui.info("\n📋 方案规划完成。输入 y 执行 / n 取消 / 或输入修改意见:")
+                finally:
+                    esc_detector.stop()
+                session_meta["turns"] = session_meta.get("turns", 0) + 1
+                _save_session(session_mgr, history, session_meta)
+
             # skill 执行计为一轮对话
             if ctx._skill_executed:
                 session_meta["turns"] = session_meta.get("turns", 0) + 1
@@ -273,12 +415,13 @@ def main() -> None:
     session_mgr.cleanup()
 
 
-def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
-              workspace_root=None, interrupt_event=None,
-              thinking_log: list[str] | None = None) -> None:
+def _run_turn_with_result(user_input: str, history, provider, ui, memory_mgr=None,
+                          workspace_root=None, interrupt_event=None,
+                          thinking_log: list[str] | None = None,
+                          allowed_tools: set[str] | None = None):
+    """执行一轮对话并返回 LoopResult。"""
     from agent.history import make_user
-    from agent.loop import run_loop
-    from agent.terminal import EscInterrupt
+    from agent.loop import run_loop, LoopResult
 
     history.append(make_user(user_input))
 
@@ -288,6 +431,7 @@ def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
         memory_mgr=memory_mgr,
         workspace_root=workspace_root,
         thinking_log=thinking_log,
+        allowed_tools=allowed_tools,
     )
 
     if result.reason == "max_iterations":
@@ -296,6 +440,17 @@ def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
         ui.error("Context window exhausted. Consider starting a new session.")
     elif result.reason == "fatal_error":
         ui.error("A fatal error occurred. Check your API key and configuration.")
+
+    return result
+
+
+def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
+              workspace_root=None, interrupt_event=None,
+              thinking_log: list[str] | None = None,
+              allowed_tools: set[str] | None = None) -> None:
+    _run_turn_with_result(user_input, history, provider, ui, memory_mgr,
+                          workspace_root, interrupt_event, thinking_log,
+                          allowed_tools)
 
 
 def _save_session(session_mgr, history, meta: dict) -> None:
