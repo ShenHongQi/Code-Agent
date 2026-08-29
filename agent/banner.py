@@ -17,8 +17,8 @@ LOGO_LINES = [
     "█   █ █████ █████ █████ █   █ █ █   █",
 ]
 
-# OpenCode 风格渐变：从主色调到暖金再回来
-ROW_COLORS = ["#fab283", "#e5a070", "#d09060", "#e5a070", "#fab283"]
+# 惠惠风格渐变：深红橙 → 暗红 → 深红橙
+ROW_COLORS = ["#e05252", "#c94444", "#b33838", "#c94444", "#e05252"]
 
 TAGLINE = "⚡ Explosion-class Coding Agent"
 

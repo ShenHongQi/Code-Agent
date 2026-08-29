@@ -1,7 +1,7 @@
-"""统一主题：参考 OpenCode 配色方案。
+"""统一主题：Megumin (KonoSuba 惠惠) 配色方案。
 
-OpenCode 默认主题 dark mode 色板：
-  Primary:    #fab283 (暖桃金)  — assistant 消息左边框、链接、列表标记
+色板：
+  Primary:    #e05252 (深红橙)  — 惠惠斗篷色，assistant 消息左边框、链接、列表标记
   Secondary:  #5c9cf5 (蓝)      — user 消息左边框、标题
   Accent:     #9d7cd8 (紫)      — 粗体强调
   Muted:      #6a6a6a           — 工具调用、注释
@@ -11,8 +11,8 @@ OpenCode 默认主题 dark mode 色板：
 from rich.style import Style
 from rich.theme import Theme
 
-# ─── OpenCode Dark Palette ───
-PRIMARY = "#fab283"        # 暖桃金 — 主色调
+# ─── Megumin Dark Palette (KonoSuba 惠惠配色) ───
+PRIMARY = "#e05252"        # 深红橙 — 惠惠斗篷/爆裂魔法色
 SECONDARY = "#5c9cf5"      # 蓝 — 副色调
 ACCENT = "#9d7cd8"         # 紫 — 第三色
 TEXT = "#e0e0e0"           # 前景文字
@@ -22,7 +22,7 @@ BG = "#212121"             # 背景
 BG_SECONDARY = "#252525"   # 次背景
 BG_DARKER = "#121212"      # 深背景
 BORDER = "#4b4c5c"         # 普通边框
-BORDER_FOCUSED = PRIMARY   # 聚焦边框 = 主色
+BORDER_FOCUSED = PRIMARY   # 聚焦边框 = 惠惠红
 BORDER_DIM = "#303030"     # 暗淡边框
 
 # 状态色
@@ -72,7 +72,7 @@ DIM = "\033[2m"
 ITALIC = "\033[3m"
 
 # 256-color 近似（终端流式输出用）
-ANSI_PRIMARY = "\033[38;5;216m"    # #ffaf87 ≈ #fab283
+ANSI_PRIMARY = "\033[38;5;167m"    # #d75f5f ≈ #e05252
 ANSI_SECONDARY = "\033[38;5;75m"   # #5fafff ≈ #5c9cf5
 ANSI_ACCENT = "\033[38;5;140m"     # #af87d7 ≈ #9d7cd8
 ANSI_MUTED = "\033[38;5;242m"      # #6c6c6c ≈ #6a6a6a
