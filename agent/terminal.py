@@ -1,12 +1,14 @@
-"""终端交互：readline 历史、Spinner 动画、ESC 检测、命令补全。"""
+"""终端交互：readline 历史、Spinner 动画、ESC 检测、命令补全、resize 处理。"""
 
 from __future__ import annotations
 import os
+import signal
 import sys
 import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 HISTORY_FILE = Path.home() / ".megumin" / "history"
 HISTORY_SIZE = 1000
@@ -18,6 +20,47 @@ DIM = "\033[2m"
 ORANGE = "\033[38;5;216m"       # #ffaf87 ≈ Primary #fab283
 RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
+
+
+# ─── 终端 Resize 处理 ──────────────────────────────────────────────────────
+
+_resize_banner_cb: Callable | None = None   # 重绘 banner
+_resize_input_cb: Callable | None = None    # 重绘当前输入区域
+_prev_sigwinch = None                       # 保存之前的 handler (readline)
+
+
+def install_resize_handler(banner_cb: Callable) -> None:
+    """安装 SIGWINCH handler。banner_cb 负责输出 banner 文本。"""
+    global _resize_banner_cb, _prev_sigwinch
+    _resize_banner_cb = banner_cb
+    if hasattr(signal, "SIGWINCH"):
+        _prev_sigwinch = signal.getsignal(signal.SIGWINCH)
+        signal.signal(signal.SIGWINCH, _handle_sigwinch)
+
+
+def _set_input_resize_cb(cb: Callable | None) -> None:
+    """注册/取消当前输入区域的 resize 回调。由 InputManager 在进出输入时调用。"""
+    global _resize_input_cb
+    _resize_input_cb = cb
+
+
+def _handle_sigwinch(signum, frame):
+    """SIGWINCH 信号处理：立即清屏 + 重绘 banner + 重绘输入区域。"""
+    try:
+        sys.stdout.write("\033[2J\033[H")  # 清屏 + 光标归位
+        sys.stdout.flush()
+        if _resize_banner_cb:
+            _resize_banner_cb()
+        if _resize_input_cb:
+            _resize_input_cb()
+    except Exception:
+        pass
+    # 链式调用之前的 handler（如 readline 的），让其更新内部终端宽度
+    if callable(_prev_sigwinch) and _prev_sigwinch not in (signal.SIG_DFL, signal.SIG_IGN):
+        try:
+            _prev_sigwinch(signum, frame)
+        except Exception:
+            pass
 
 
 class EscInterrupt(Exception):
@@ -84,20 +127,7 @@ class InputManager:
 
     def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示上下分隔线框住的输入区域。检测 / 开头触发命令补全。"""
-        width = shutil.get_terminal_size().columns
-        sep = f"{ORANGE}{'─' * width}{RESET}"
-
-        # 画框架
-        sys.stdout.write(f"\n{sep}\n")
-        sys.stdout.write("\n")
-        sys.stdout.write(f"{sep}\n")
-        model_line = f"{DIM}  model: {model}{RESET}" if model else ""
-        if model_line:
-            sys.stdout.write(f"{model_line}\n")
-
-        up = 3 if model else 2
-        sys.stdout.write(f"\033[{up}A\r")
-        sys.stdout.flush()
+        self._draw_input_frame(model)
 
         # 如果有 prefill 且以 / 开头 — _slash_input 自行处理框架底部和光标
         if prefill and prefill.startswith("/") and self._commands:
@@ -106,6 +136,9 @@ class InputManager:
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
+        # 注册 resize 回调：SIGWINCH 时重绘输入框
+        _set_input_resize_cb(lambda: self._draw_input_frame(model))
+
         slash_used = False
         try:
             if not prefill and self._commands and sys.stdin.isatty() and os.name != "nt":
@@ -113,16 +146,31 @@ class InputManager:
             else:
                 result = input(f"{BOLD}{ORANGE}> {RESET}")
         finally:
+            _set_input_resize_cb(None)
             if self._readline_available:
                 self._readline.set_startup_hook()
 
         if not slash_used:
-            # 普通输入后，光标在输入行下一行（底线处），跳过剩余框架
             down = 2 if model else 1
             sys.stdout.write(f"\033[{down}B\r")
             sys.stdout.flush()
 
         return result.strip()
+
+    def _draw_input_frame(self, model: str = "") -> None:
+        """绘制输入区域框架：上分隔线 + 输入行 + 下分隔线 + model，光标停在输入行。"""
+        width = shutil.get_terminal_size().columns
+        sep = f"{ORANGE}{'─' * width}{RESET}"
+
+        sys.stdout.write(f"\n{sep}\n")
+        sys.stdout.write("\n")
+        sys.stdout.write(f"{sep}\n")
+        if model:
+            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
+
+        up = 3 if model else 2
+        sys.stdout.write(f"\033[{up}A\r")
+        sys.stdout.flush()
 
     def _input_with_slash_detect(self, model: str) -> tuple[str, bool]:
         """读取第一个字符，如果是 / 则进入命令补全模式。
