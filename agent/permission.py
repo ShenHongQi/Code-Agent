@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -282,77 +283,152 @@ RISK_LABELS = {
 }
 
 
-def _ask_confirmation(command: str, risk: RiskLevel, rationale: str) -> None:
-    """Bash 命令确认 UI，带风险等级颜色。"""
+_spinner_pause_cb = None
+
+
+def set_spinner_control(pause_cb) -> None:
+    global _spinner_pause_cb
+    _spinner_pause_cb = pause_cb
+
+
+def _interactive_confirm(description: str, detail: str,
+                         risk: RiskLevel, options: list[tuple[str, str]]) -> str:
+    """Arrow-key interactive permission prompt. Returns the chosen option key."""
     import shutil
-    width = shutil.get_terminal_size().columns
 
     risk_color = RISK_COLORS.get(risk, YELLOW)
     risk_label = RISK_LABELS.get(risk, "")
-    sep = f"{risk_color}{'─' * width}{RESET}"
 
-    sys.stdout.write(f"\n{sep}\n")
-    sys.stdout.write(f"{risk_color}{risk_label}{RESET}")
-    if rationale:
-        sys.stdout.write(f"{DIM} — {rationale}{RESET}")
-    sys.stdout.write("\n")
-    sys.stdout.write(f"  {BOLD}{command}{RESET}\n")
-    sys.stdout.write(f"{sep}\n")
-    sys.stdout.write(
-        f"  {ORANGE}[y]{RESET} 允许一次"
-        f"  {ORANGE}[a]{RESET} 本次会话允许同类"
-        f"  {ORANGE}[n]{RESET} 拒绝  > "
-    )
-    sys.stdout.flush()
+    if _spinner_pause_cb:
+        _spinner_pause_cb()
+
+    width = shutil.get_terminal_size().columns
+    detail_max = width - 6
+    detail_short = detail[:detail_max] + ("…" if len(detail) > detail_max else "")
+
+    if not sys.stdin.isatty() or os.name == "nt":
+        sys.stdout.write(f"\n  {risk_color}{risk_label}{RESET}")
+        if description:
+            sys.stdout.write(f" — {description}")
+        sys.stdout.write(f"\n    {BOLD}{detail_short}{RESET}\n")
+        for i, (_, label) in enumerate(options):
+            sys.stdout.write(f"    {i + 1}. {label}\n")
+        sys.stdout.write("  > ")
+        sys.stdout.flush()
+        try:
+            answer = input().strip()
+            idx = int(answer) - 1
+            if 0 <= idx < len(options):
+                return options[idx][0]
+        except (ValueError, EOFError, KeyboardInterrupt):
+            pass
+        return "deny"
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+
+    selected = 0
+    total = len(options)
+    render_lines = 2 + total
+
+    def _draw():
+        sys.stdout.write(f"\033[{render_lines}A\r\033[J")
+        sys.stdout.write(f"  {risk_color}{risk_label}{RESET}")
+        if description:
+            sys.stdout.write(f" — {description}")
+        sys.stdout.write("\n")
+        sys.stdout.write(f"    {BOLD}{detail_short}{RESET}\n")
+        for i, (_, label) in enumerate(options):
+            if i == selected:
+                sys.stdout.write(f"  {BOLD}{risk_color}❯ {label}{RESET}\n")
+            else:
+                sys.stdout.write(f"  {DIM}  {label}{RESET}\n")
+        sys.stdout.flush()
+
+    def _collapse(chosen_label: str):
+        sys.stdout.write(f"\033[{render_lines}A\r\033[J")
+        sys.stdout.write(f"  {risk_color}{risk_label}{RESET} {detail_short} {DIM}→ {chosen_label}{RESET}\n")
+        sys.stdout.flush()
 
     try:
-        answer = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        raise PermissionDenied("User denied.")
+        tty.setcbreak(fd)
 
-    if answer in ("y", "yes"):
+        sys.stdout.write(f"  {risk_color}{risk_label}{RESET}")
+        if description:
+            sys.stdout.write(f" — {description}")
+        sys.stdout.write("\n")
+        sys.stdout.write(f"    {BOLD}{detail_short}{RESET}\n")
+        for i, (_, label) in enumerate(options):
+            if i == selected:
+                sys.stdout.write(f"  {BOLD}{risk_color}❯ {label}{RESET}\n")
+            else:
+                sys.stdout.write(f"  {DIM}  {label}{RESET}\n")
+        sys.stdout.flush()
+
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A":
+                    selected = (selected - 1) % total
+                    _draw()
+                elif seq == "[B":
+                    selected = (selected + 1) % total
+                    _draw()
+            elif ch in ("\r", "\n"):
+                chosen_key, chosen_label = options[selected]
+                _collapse(chosen_label)
+                return chosen_key
+            elif ch == "\x03":
+                _collapse("denied")
+                return "deny"
+
+    except (termios.error, OSError, KeyboardInterrupt):
+        try:
+            _collapse("denied")
+        except Exception:
+            pass
+        return "deny"
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except (termios.error, OSError):
+            pass
+
+
+def _ask_confirmation(command: str, risk: RiskLevel, rationale: str) -> None:
+    options = [
+        ("once", "允许一次"),
+        ("all", "本次会话允许同类"),
+        ("deny", "拒绝"),
+    ]
+    choice = _interactive_confirm(rationale, command, risk, options)
+    if choice == "once":
         return
-    elif answer in ("a", "all"):
+    elif choice == "all":
         _state.remember_allow(command)
         return
-    else:
-        raise PermissionDenied("User denied.")
+    raise PermissionDenied("User denied.")
 
 
 def _ask_tool_confirmation(tool_name: str, args: dict,
                            risk: RiskLevel, rationale: str) -> None:
-    """非 bash 工具确认 UI。"""
-    import shutil
-    width = shutil.get_terminal_size().columns
-
-    risk_color = RISK_COLORS.get(risk, YELLOW)
-    risk_label = RISK_LABELS.get(risk, "")
-    sep = f"{risk_color}{'─' * width}{RESET}"
-
-    sys.stdout.write(f"\n{sep}\n")
-    sys.stdout.write(f"{risk_color}{risk_label}{RESET}")
-    if rationale:
-        sys.stdout.write(f"{DIM} — {rationale}{RESET}")
-    sys.stdout.write("\n")
-    sys.stdout.write(f"  {BOLD}{tool_name}{RESET}")
+    detail = tool_name
     if "path" in args:
-        sys.stdout.write(f"  {DIM}{args['path']}{RESET}")
+        detail += f"  {args['path']}"
     elif "url" in args:
-        sys.stdout.write(f"  {DIM}{args['url']}{RESET}")
-    sys.stdout.write("\n")
-    sys.stdout.write(f"{sep}\n")
-    sys.stdout.write(f"  {ORANGE}[y]{RESET} 允许  {ORANGE}[n]{RESET} 拒绝  > ")
-    sys.stdout.flush()
-
-    try:
-        answer = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        raise PermissionDenied("User denied.")
-
-    if answer in ("y", "yes"):
+        detail += f"  {args['url']}"
+    options = [
+        ("once", "允许"),
+        ("deny", "拒绝"),
+    ]
+    choice = _interactive_confirm(rationale, detail, risk, options)
+    if choice == "once":
         return
-    else:
-        raise PermissionDenied("User denied.")
+    raise PermissionDenied("User denied.")
 
 
 # ─── 权限检查入口 ──────────────────────────────────────────────────────────
