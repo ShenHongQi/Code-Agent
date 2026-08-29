@@ -162,6 +162,9 @@ def run_loop(
         assistant_msg = acc.to_message()
         history.append(assistant_msg)
 
+        # 保存流式状态（assistant_end 会清除标志）
+        was_streamed = ui._streaming_active
+
         # 停止 spinner
         ui.assistant_end()
 
@@ -169,7 +172,7 @@ def run_loop(
         if acc.is_natural_stop:
             # 纠偏：如果 assistant 只输出文本且包含代码块/命令，提醒它调用工具
             if acc.content and _looks_like_missed_tool_call(acc.content) and iteration < max_iter - 1:
-                if not ui._streaming_active:
+                if not was_streamed:
                     ui.show_thinking(acc.content)
                 if thinking_log is not None:
                     thinking_log.append(acc.content)
@@ -182,7 +185,7 @@ def run_loop(
                 continue
 
             # 最终回答：流式已输出则跳过重复渲染
-            if not ui._streaming_active:
+            if not was_streamed:
                 ui.show_response(acc.content or "")
             ui.show_thinking_summary()
             return LoopResult("natural_stop", iteration)
@@ -190,7 +193,7 @@ def run_loop(
         # Process tool calls → 中间思考
         if acc.has_tool_calls:
             if acc.content:
-                if not ui._streaming_active:
+                if not was_streamed:
                     ui.show_thinking(acc.content)
                 if thinking_log is not None:
                     thinking_log.append(acc.content)

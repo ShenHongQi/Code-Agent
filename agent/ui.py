@@ -33,6 +33,29 @@ THINKING_MAX_LINES = 3
 _THICK_BAR = "┃"
 _STREAM_HEADER = f"\n{BOLD}{ANSI_PRIMARY}{_THICK_BAR} ◆ Assistant{RESET}\n"
 
+# 工具执行时的 spinner 标签
+TOOL_STATUS: dict[str, str] = {
+    "read_file": "reading",
+    "write_file": "writing",
+    "edit_file": "editing",
+    "multi_edit": "editing",
+    "delete_file": "deleting",
+    "rename_file": "renaming",
+    "bash": "running",
+    "spawn": "spawning",
+    "glob": "searching",
+    "grep": "searching",
+    "web_fetch": "fetching",
+    "task": "delegating",
+    "list_dir": "listing",
+    "view_diff": "diffing",
+    "memory_read": "recalling",
+    "memory_write": "memorizing",
+    "todo_write": "planning",
+    "proc_status": "checking",
+    "proc_kill": "killing",
+}
+
 
 def _build_redact_patterns() -> list[str]:
     patterns = []
@@ -54,6 +77,7 @@ class UI:
         self._console = Console(theme=MEGUMIN_THEME, highlight=False)
         self._streaming_active = False
         self._md_renderer: StreamingMarkdownRenderer | None = None
+        self._stream_full_text = ""
         self._status_active = False
         self._status_thread: threading.Thread | None = None
         self._status_stop = threading.Event()
@@ -110,10 +134,13 @@ class UI:
     def assistant_start(self) -> None:
         self._streaming_active = False
         self._md_renderer = None
+        self._stream_full_text = ""
         self._start_spinner("thinking")
 
     def assistant_end(self) -> None:
         self._stop_spinner()
+        from agent.terminal import set_resize_stream_cb
+        set_resize_stream_cb(None)
         if self._streaming_active and self._md_renderer:
             tail = self._md_renderer.flush()
             if tail:
@@ -121,6 +148,7 @@ class UI:
             sys.stdout.write("\n")
             sys.stdout.flush()
             self._streaming_active = False
+        self._stream_full_text = ""
 
     def stream_token(self, token: str) -> None:
         if not self._stream:
@@ -131,10 +159,26 @@ class UI:
             sys.stdout.flush()
             self._md_renderer = StreamingMarkdownRenderer()
             self._streaming_active = True
+            from agent.terminal import set_resize_stream_cb
+            set_resize_stream_cb(self._handle_stream_resize)
+        self._stream_full_text += token
         rendered = self._md_renderer.feed(token)
         if rendered:
             sys.stdout.write(rendered)
             sys.stdout.flush()
+
+    def _handle_stream_resize(self) -> None:
+        """SIGWINCH 期间调用：用新宽度重新渲染已累积的流式内容。"""
+        if not self._streaming_active or not self._stream_full_text:
+            return
+        sys.stdout.write(_STREAM_HEADER)
+        # 批量渲染已累积的全部文本（新宽度）
+        rendered = render_markdown(self._stream_full_text)
+        sys.stdout.write(rendered)
+        # 重建流式渲染器并静默回放，恢复内部状态以继续接收后续 token
+        self._md_renderer = StreamingMarkdownRenderer()
+        self._md_renderer.feed(self._stream_full_text)
+        sys.stdout.flush()
 
     def show_thinking(self, content: str, max_lines: int = THINKING_MAX_LINES) -> None:
         if not content or not content.strip():
@@ -206,6 +250,7 @@ class UI:
             display_args = args_summary[:80] + ("…" if len(args_summary) > 80 else "")
             text.append(f"  {display_args}", style=TEXT_MUTED)
         self._console.print(text)
+        self._start_spinner(TOOL_STATUS.get(name, f"⚙ {name}"))
 
     def tool_result(self, ok: bool, summary: str) -> None:
         self._stop_spinner()
@@ -220,38 +265,117 @@ class UI:
 
     # ─── 会话重放 ─────────────────────────────────────────────────────
 
-    def replay_history(self, messages: list[dict]) -> None:
-        self._console.print()
-        self._console.print(Rule("⏪ 恢复会话历史", style=BORDER))
-        self._console.print()
+    def replay_history(self, messages: list[dict], model: str = "") -> None:
+        """重放历史消息，完全还原对话时的视觉效果。"""
+        import json
 
+        if not model:
+            from agent.config import config as _cfg
+            model = _cfg.model
+
+        tool_results: dict[str, str] = {}
         for msg in messages:
+            if msg.get("role") == "tool":
+                tool_results[msg.get("tool_call_id", "")] = msg.get("content", "")
+
+        user_turns = sum(
+            1 for m in messages
+            if m.get("role") == "user" and not self._is_system_injected(m.get("content", ""))
+        )
+        self._console.print(f"\n[muted]↻ 恢复会话 ({user_turns} 轮对话)[/muted]")
+
+        for i, msg in enumerate(messages):
             role = msg.get("role")
             content = msg.get("content", "")
 
-            if role == "system":
-                continue
-            elif role == "user":
-                first_line = content.split("\n")[0][:80]
-                self._console.print(f"  [secondary]>[/secondary] [muted]{escape(first_line)}[/muted]")
-            elif role == "assistant":
-                if content:
-                    lines = content.strip().split("\n")
-                    preview = lines[0][:100]
-                    extra = f" (+{len(lines) - 1} lines)" if len(lines) > 1 else ""
-                    self._console.print(f"  [muted]◆ {escape(preview)}{extra}[/muted]")
-                for tc in msg.get("tool_calls", []):
-                    name = tc.get("function", {}).get("name", "?")
-                    self._console.print(f"    [muted]⏺ {name}(…)[/muted]")
-            elif role == "tool":
+            if role in ("system", "tool"):
                 continue
 
+            if role == "user":
+                if self._is_system_injected(content):
+                    continue
+                self._replay_user_input(content, model)
+                continue
+
+            if role == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    if content:
+                        self.show_thinking(content)
+                    self._replay_tool_calls(tool_calls, tool_results)
+                elif content:
+                    is_intermediate = (
+                        i + 1 < len(messages)
+                        and messages[i + 1].get("role") == "user"
+                        and self._is_system_injected(messages[i + 1].get("content", ""))
+                    )
+                    if is_intermediate:
+                        self.show_thinking(content)
+                    else:
+                        self._replay_assistant_response(content)
+
         self._console.print()
-        self._console.print(
-            f"  [success]✅ 已恢复 ({len(messages)} 条消息)[/success]"
+
+    @staticmethod
+    def _is_system_injected(content: str) -> bool:
+        return (
+            content.startswith("[System]")
+            or content.startswith("## 🎯 自动目标模式")
+            or content.startswith("## 📋 设计方案模式")
+            or "用户已批准上述方案" in content[:50]
         )
-        self._console.print(Rule(style=BORDER))
-        self._console.print()
+
+    def _replay_user_input(self, content: str, model: str = "") -> None:
+        content = self._sanitize(content)
+        width = _term_width()
+        sep = f"{ANSI_PRIMARY}{'─' * width}{RESET}"
+        sys.stdout.write(f"\n{sep}\n")
+        sys.stdout.write(f"{BOLD}{ANSI_PRIMARY}> {RESET}{content}\n")
+        sys.stdout.write(f"{sep}\n")
+        if model:
+            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
+        sys.stdout.flush()
+
+    def _replay_tool_calls(self, tool_calls: list[dict], tool_results: dict[str, str]) -> None:
+        import json
+        from agent.loop import _summarize_args
+
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            name = func.get("name", "?")
+            args_str = func.get("arguments", "{}")
+            try:
+                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            except json.JSONDecodeError:
+                args = {}
+            summary = self._sanitize(_summarize_args(name, args))
+
+            text = Text()
+            text.append("  ⏺ ", style=TEXT_MUTED)
+            text.append(name, style=f"bold {TEXT_MUTED}")
+            if summary:
+                display = summary[:80] + ("…" if len(summary) > 80 else "")
+                text.append(f"  {display}", style=TEXT_MUTED)
+            self._console.print(text)
+
+            tc_id = tc.get("id", "")
+            result_content = self._sanitize(tool_results.get(tc_id, ""))
+            ok = not result_content.startswith("Error:")
+            icon = "⎿" if ok else "✗"
+            style = SUCCESS if ok else ERROR
+            first_line = result_content.split("\n")[0][:120]
+            text = Text()
+            text.append(f"    {icon} ", style=style)
+            text.append(first_line, style=style if not ok else "default")
+            self._console.print(text)
+
+    def _replay_assistant_response(self, content: str) -> None:
+        content = self._sanitize(content)
+        sys.stdout.write(_STREAM_HEADER)
+        rendered = render_markdown(content)
+        sys.stdout.write(rendered)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
     # ─── 通用消息 ─────────────────────────────────────────────────────
 

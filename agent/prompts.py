@@ -20,6 +20,9 @@ If you need to run `mkdir foo && npm init -y`, call bash(command="mkdir foo && n
 If you need to create a file, call write_file(path="...", content="...").
 Do NOT output commands in markdown code blocks — CALL the tool.
 
+## Language
+- Always respond in the same language the user uses. If the user writes in Chinese, ALL your output (reasoning, explanations, comments) MUST be in Chinese. Never switch to English unless the user writes in English.
+
 ## Rules
 - Always work within the workspace directory.
 - Read files before editing them — edit_file requires an exact unique match.
