@@ -201,8 +201,32 @@ class StreamingMarkdownRenderer:
                 w += 1
         return w
 
+    @staticmethod
+    def _strip_ansi(s: str) -> str:
+        """去除 ANSI 转义码，返回纯文本。"""
+        return re.sub(r'\033\[[0-9;]*m', '', s)
+
+    def _ansi_visual_width(self, s: str) -> int:
+        """计算含 ANSI 码字符串的可视宽度。"""
+        return self._visual_width(self._strip_ansi(s))
+
+    @staticmethod
+    def _truncate_to_visual_width(s: str, max_w: int) -> str:
+        """截断纯文本至不超过 max_w 列宽，附加 … 标记。"""
+        w = 0
+        for i, ch in enumerate(s):
+            cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+            if w + cw > max_w - 1:  # 留 1 列给 …
+                return s[:i] + "…"
+            w += cw
+        return s
+
     def _render_table(self) -> str:
-        """渲染 Markdown 表格为带边框的终端表格。"""
+        """渲染 Markdown 表格为带边框的终端表格。
+
+        核心修复：先渲染行内格式再计算可视宽度和填充，
+        避免 ANSI 码干扰列对齐。
+        """
         if not self._table_rows:
             return ""
 
@@ -217,6 +241,7 @@ class StreamingMarkdownRenderer:
         def is_separator(row: str) -> bool:
             return bool(re.match(r'^[\s|:\-]+$', row)) and "--" in row
 
+        # ── 解析行和对齐 ──
         parsed: list[list[str]] = []
         sep_idx = -1
         aligns: list[str] = []
@@ -245,57 +270,72 @@ class StreamingMarkdownRenderer:
         while len(aligns) < num_cols:
             aligns.append("left")
 
-        vw = self._visual_width
+        has_header = sep_idx == 1
 
-        col_widths = [0] * num_cols
-        for r in parsed:
-            for j, cell in enumerate(r):
-                col_widths[j] = max(col_widths[j], vw(cell))
-        col_widths = [max(w, 3) for w in col_widths]
+        # ── 先渲染行内格式，再测量可视宽度 ──
+        rendered: list[list[str]] = []
+        for i, row in enumerate(parsed):
+            rendered_row = []
+            for cell in row:
+                inline = self._render_inline(cell)
+                if has_header and i == 0:
+                    rendered_row.append(f"{BOLD}{self._strip_ansi(inline)}{RESET}")
+                else:
+                    rendered_row.append(inline)
+            rendered.append(rendered_row)
 
-        max_table_w = self._width - 4
-        total = sum(col_widths) + num_cols * 3 + 1
-        if total > max_table_w and num_cols > 0:
-            shrink = (total - max_table_w) // num_cols + 1
-            col_widths = [max(3, w - shrink) for w in col_widths]
+        avw = self._ansi_visual_width
 
-        def align_cell(text: str, width: int, alignment: str) -> str:
-            tw = vw(text)
-            if tw > width:
-                # 截断到目标宽度
-                out, cur = "", 0
-                for ch in text:
-                    cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-                    if cur + cw > width:
-                        break
-                    out += ch
-                    cur += cw
-                text = out
-                tw = cur
-            pad = width - tw
+        # ── 基于渲染后可视宽度计算列宽 ──
+        col_widths = [3] * num_cols
+        for row in rendered:
+            for j, cell in enumerate(row):
+                col_widths[j] = max(col_widths[j], avw(cell))
+
+        # ── 限制总宽度不超过终端 ──
+        border_overhead = num_cols * 3 + 1  # │ + 2 padding per col + closing │
+        max_content_w = self._width - border_overhead - 2  # 留 2 列余量
+        total_content = sum(col_widths)
+
+        if total_content > max_content_w and num_cols > 0:
+            # 按比例缩减，每列最少 4 列宽
+            scale = max_content_w / total_content
+            col_widths = [max(4, int(w * scale)) for w in col_widths]
+            # 微调：多余的宽度补回最宽列
+            remainder = max_content_w - sum(col_widths)
+            if remainder > 0:
+                widest = col_widths.index(max(col_widths))
+                col_widths[widest] += remainder
+
+        # ── 对齐填充（在 ANSI 渲染后的文本上操作） ──
+        def pad_cell(rendered_text: str, width: int, alignment: str) -> str:
+            vw = avw(rendered_text)
+            if vw > width:
+                # 截断：先去 ANSI 截断纯文本，再重新渲染
+                plain = self._strip_ansi(rendered_text)
+                truncated = self._truncate_to_visual_width(plain, width)
+                # 重新简单渲染截断后的文本（可能丢失部分格式，但对齐正确）
+                rendered_text = truncated
+                vw = self._visual_width(truncated)
+            pad = width - vw
             if alignment == "center":
                 left = pad // 2
-                return " " * left + text + " " * (pad - left)
+                return " " * left + rendered_text + " " * (pad - left)
             elif alignment == "right":
-                return " " * pad + text
-            return text + " " * pad
+                return " " * pad + rendered_text
+            return rendered_text + " " * pad
 
-        def hline(left: str, mid: str, right: str, fill: str = "─") -> str:
-            segs = [fill * (w + 2) for w in col_widths]
+        # ── 生成输出 ──
+        def hline(left: str, mid: str, right: str) -> str:
+            segs = ["─" * (w + 2) for w in col_widths]
             return f"{DIM}{left}{mid.join(segs)}{right}{RESET}"
 
         lines = [hline("┌", "┬", "┐")]
 
-        has_header = sep_idx == 1
-
-        for i, row in enumerate(parsed):
+        for i, row in enumerate(rendered):
             cells = []
             for j, cell in enumerate(row):
-                aligned = align_cell(cell, col_widths[j], aligns[j])
-                if has_header and i == 0:
-                    cells.append(f"{BOLD}{aligned}{RESET}")
-                else:
-                    cells.append(self._render_inline(aligned))
+                cells.append(pad_cell(cell, col_widths[j], aligns[j]))
             inner = f"{DIM}│{RESET}".join(f" {c} " for c in cells)
             lines.append(f"{DIM}│{RESET}{inner}{DIM}│{RESET}")
 
