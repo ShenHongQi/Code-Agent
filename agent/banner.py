@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from agent.theme import MEGUMIN_THEME, ACCENT, ACCENT_DIM, MUTED
+from agent.theme import MEGUMIN_THEME, PRIMARY, TEXT_MUTED, BORDER
 
 LOGO_LINES = [
     "█   █ █████ █████ █   █ █   █ █ █   █",
@@ -16,13 +16,13 @@ LOGO_LINES = [
     "█   █ █████ █████ █████ █   █ █ █   █",
 ]
 
-ROW_COLORS = ["#ff8700", "#ff5f00", "#d75f00", "#ff5f00", "#ff8700"]
+# OpenCode 风格渐变：从主色调到暖金再回来
+ROW_COLORS = ["#fab283", "#e5a070", "#d09060", "#e5a070", "#fab283"]
 
 TAGLINE = "⚡ Explosion-class Coding Agent"
 
 
 def render_banner(model: str = "", workspace: str = "") -> str:
-    """渲染启动 banner，返回字符串。"""
     console = Console(theme=MEGUMIN_THEME, force_terminal=True)
 
     logo = Text()
@@ -33,7 +33,7 @@ def render_banner(model: str = "", workspace: str = "") -> str:
 
     body = Text()
     body.append(logo)
-    body.append(f"\n\n{TAGLINE}", style=f"italic {MUTED}")
+    body.append(f"\n\n{TAGLINE}", style=f"italic {TEXT_MUTED}")
 
     if model or workspace:
         parts = []
@@ -41,13 +41,13 @@ def render_banner(model: str = "", workspace: str = "") -> str:
             parts.append(f"model: {model}")
         if workspace:
             parts.append(f"workspace: {workspace}")
-        body.append(f"\n{' │ '.join(parts)}", style=MUTED)
+        body.append(f"\n{' │ '.join(parts)}", style=TEXT_MUTED)
 
-    body.append(f"\nType your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.", style=MUTED)
+    body.append(f"\nType your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.", style=TEXT_MUTED)
 
     panel = Panel(
         body,
-        border_style=ACCENT_DIM,
+        border_style=BORDER,
         padding=(1, 2),
     )
 

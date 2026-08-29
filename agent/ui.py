@@ -1,9 +1,6 @@
 """终端 UI：基于 Rich 的流式渲染、工具展示、状态指示。
 
-设计参考：
-- OpenCode 的彩色左边框角色标识
-- Rich Panel/Syntax/Markdown 组件
-- 流式输出保持自定义增量渲染器（性能优先）
+设计参考：OpenCode TUI — ThickBorder 左边框角色标识、动态宽度适配。
 """
 
 from __future__ import annotations
@@ -23,15 +20,18 @@ from rich.text import Text
 
 from agent.markdown import StreamingMarkdownRenderer, render_markdown
 from agent.theme import (
-    MEGUMIN_THEME, ACCENT, ACCENT_DIM, ACCENT_BRIGHT,
-    MUTED, SUCCESS, ERROR, WARNING, INFO,
-    RESET, BOLD, DIM, ORANGE,
+    MEGUMIN_THEME,
+    PRIMARY, SECONDARY, ACCENT, TEXT_MUTED, BORDER, BORDER_DIM,
+    SUCCESS, ERROR, WARNING, INFO,
+    RESET, BOLD, DIM,
+    ANSI_PRIMARY, ANSI_MUTED,
 )
 
 THINKING_MAX_LINES = 3
 
-# ─── 流式输出用的轻量 ANSI 常量 ─────────────────────────────────────
-_STREAM_HEADER = f"\n{BOLD}\033[38;5;208m◆ Assistant{RESET}\n"
+# ThickBorder 左侧标识符（参考 OpenCode）
+_THICK_BAR = "┃"
+_STREAM_HEADER = f"\n{BOLD}{ANSI_PRIMARY}{_THICK_BAR} ◆ Assistant{RESET}\n"
 
 
 def _build_redact_patterns() -> list[str]:
@@ -40,6 +40,10 @@ def _build_redact_patterns() -> list[str]:
     if key and len(key) >= 8:
         patterns.append(key)
     return patterns
+
+
+def _term_width() -> int:
+    return shutil.get_terminal_size().columns
 
 
 class UI:
@@ -84,7 +88,7 @@ class UI:
         if self._status_thread:
             self._status_thread.join(timeout=1)
             self._status_thread = None
-        cols = shutil.get_terminal_size().columns
+        cols = _term_width()
         sys.stdout.write("\r" + " " * cols + "\r")
         sys.stdout.flush()
 
@@ -95,7 +99,7 @@ class UI:
             elapsed = time.time() - self._status_start_time
             frame = frames[idx % len(frames)]
             label = self._status_label
-            line = f"\r\033[38;5;208m{frame}\033[0m \033[2m{label} ({elapsed:.1f}s)\033[0m   "
+            line = f"\r{ANSI_PRIMARY}{frame}{RESET} {DIM}{label} ({elapsed:.1f}s){RESET}   "
             sys.stdout.write(line)
             sys.stdout.flush()
             idx += 1
@@ -156,17 +160,21 @@ class UI:
         if not content or not content.strip():
             return
         content = self._sanitize(content)
-        # 用 Rich Panel + 橙色左边框（参考 OpenCode 风格）
         rendered = render_markdown(content)
-        panel = Panel(
-            rendered,
-            title="[bold]◆ Assistant[/bold]",
-            title_align="left",
-            border_style=ACCENT,
-            padding=(0, 1),
-        )
+        # OpenCode 风格：左侧 ThickBorder 标记 assistant 消息
+        lines = rendered.split("\n")
+        body = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                body.append("\n")
+            body.append(f" {_THICK_BAR} ", style=f"bold {PRIMARY}")
+            body.append(line)
         self._console.print()
-        self._console.print(panel)
+        title = Text()
+        title.append(f" {_THICK_BAR} ", style=f"bold {PRIMARY}")
+        title.append("◆ Assistant", style=f"bold {PRIMARY}")
+        self._console.print(title)
+        self._console.print(body)
 
     def show_thinking_summary(self) -> None:
         if self._thinking_total_lines > THINKING_MAX_LINES:
@@ -192,11 +200,11 @@ class UI:
         self._stop_spinner()
         args_summary = self._sanitize(args_summary)
         text = Text()
-        text.append("  ⏺ ", style=ACCENT_DIM)
-        text.append(name, style=f"bold {ACCENT_DIM}")
+        text.append("  ⏺ ", style=TEXT_MUTED)
+        text.append(name, style=f"bold {TEXT_MUTED}")
         if args_summary:
             display_args = args_summary[:80] + ("…" if len(args_summary) > 80 else "")
-            text.append(f"  {display_args}", style=MUTED)
+            text.append(f"  {display_args}", style=TEXT_MUTED)
         self._console.print(text)
 
     def tool_result(self, ok: bool, summary: str) -> None:
@@ -214,7 +222,7 @@ class UI:
 
     def replay_history(self, messages: list[dict]) -> None:
         self._console.print()
-        self._console.print(Rule("⏪ 恢复会话历史", style=ACCENT_DIM))
+        self._console.print(Rule("⏪ 恢复会话历史", style=BORDER))
         self._console.print()
 
         for msg in messages:
@@ -225,7 +233,7 @@ class UI:
                 continue
             elif role == "user":
                 first_line = content.split("\n")[0][:80]
-                self._console.print(f"  [accent]>[/accent] [muted]{escape(first_line)}[/muted]")
+                self._console.print(f"  [secondary]>[/secondary] [muted]{escape(first_line)}[/muted]")
             elif role == "assistant":
                 if content:
                     lines = content.strip().split("\n")
@@ -242,7 +250,7 @@ class UI:
         self._console.print(
             f"  [success]✅ 已恢复 ({len(messages)} 条消息)[/success]"
         )
-        self._console.print(Rule(style=ACCENT_DIM))
+        self._console.print(Rule(style=BORDER))
         self._console.print()
 
     # ─── 通用消息 ─────────────────────────────────────────────────────

@@ -11,12 +11,12 @@ from pathlib import Path
 HISTORY_FILE = Path.home() / ".megumin" / "history"
 HISTORY_SIZE = 1000
 
-# ANSI
+# ANSI — 与 theme.py OpenCode 配色对齐
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-ORANGE = "\033[38;5;208m"
-RED_ORANGE = "\033[38;5;209m"
+ORANGE = "\033[38;5;216m"       # #ffaf87 ≈ Primary #fab283
+RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
 
 

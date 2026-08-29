@@ -16,27 +16,35 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from agent.theme import MEGUMIN_THEME, ACCENT, ACCENT_DIM, MUTED
+from agent.theme import (
+    MEGUMIN_THEME,
+    PRIMARY, SECONDARY, ACCENT, TEXT_MUTED,
+    MD_HEADING, MD_LINK, MD_CODE, MD_BLOCKQUOTE, MD_LIST, MD_STRONG,
+    RESET, BOLD, DIM, ITALIC,
+    ANSI_PRIMARY, ANSI_SECONDARY, ANSI_ACCENT, ANSI_MUTED,
+)
 
 # 轻量 ANSI（仅流式渲染用，避免每 token 构造 Rich 对象）
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-ITALIC = "\033[3m"
 UNDERLINE = "\033[4m"
 STRIKETHROUGH = "\033[9m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
 BLUE = "\033[34m"
-MAGENTA = "\033[35m"
-CYAN = "\033[36m"
-GRAY = "\033[90m"
-ORANGE = "\033[38;5;208m"
-LIGHT_ORANGE = "\033[38;5;215m"
 BG_CODE = "\033[48;5;235m"
 
+# 从主题色派生的 ANSI 常量
+_H1_COLOR = f"{BOLD}{ANSI_SECONDARY}"          # 标题用副色调蓝
+_H2_COLOR = f"{BOLD}{ANSI_SECONDARY}"
+_H3_COLOR = f"{BOLD}{ANSI_PRIMARY}"             # 三级标题用主色调
+_H4_COLOR = f"{BOLD}{ANSI_ACCENT}"              # 四级标题用强调紫
+_LINK_COLOR = f"{UNDERLINE}{ANSI_PRIMARY}"      # 链接用主色调
+_CODE_INLINE = f"{BG_CODE}{ANSI_PRIMARY}"       # 行内代码
+_LIST_MARKER = ANSI_PRIMARY                     # 列表标记
+_QUOTE_COLOR = f"{ITALIC}{ANSI_ACCENT}"         # 引用用强调色
+
 _console = Console(theme=MEGUMIN_THEME, highlight=False, force_terminal=True)
+
+
+def _get_width() -> int:
+    return shutil.get_terminal_size().columns
 
 
 class StreamingMarkdownRenderer:
@@ -45,6 +53,8 @@ class StreamingMarkdownRenderer:
     普通行 → 立即 ANSI 渲染输出
     代码块 → 缓冲完整后用 Rich Syntax 高亮
     表格   → 缓冲完整后用 Rich Table 渲染
+
+    每次渲染时动态获取终端宽度，确保 resize 后立即适配。
     """
 
     def __init__(self):
@@ -54,7 +64,10 @@ class StreamingMarkdownRenderer:
         self._code_lines: list[str] = []
         self._in_table = False
         self._table_rows: list[str] = []
-        self._width = shutil.get_terminal_size().columns
+
+    @property
+    def _width(self) -> int:
+        return _get_width()
 
     def feed(self, token: str) -> str:
         self._buffer += token
@@ -94,7 +107,6 @@ class StreamingMarkdownRenderer:
         # ─── 代码块 ───
         if stripped.startswith("```"):
             if not self._in_code_block:
-                # 如果正在收集表格，先输出
                 if self._in_table:
                     table_out = self._render_table()
                     self._in_table = False
@@ -123,12 +135,10 @@ class StreamingMarkdownRenderer:
             if self._in_table:
                 self._table_rows.append(stripped)
                 return None
-            # 开始表格
             self._in_table = True
             self._table_rows = [stripped]
             return None
 
-        # 表格结束
         if self._in_table:
             rendered = self._render_table()
             self._in_table = False
@@ -142,7 +152,8 @@ class StreamingMarkdownRenderer:
 
         # 水平线
         if re.match(r'^[-*_]{3,}\s*$', stripped):
-            return f"{DIM}{'─' * min(self._width - 2, 60)}{RESET}"
+            w = self._width
+            return f"{DIM}{'─' * min(w - 2, 60)}{RESET}"
 
         # 标题
         header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
@@ -156,7 +167,7 @@ class StreamingMarkdownRenderer:
         if list_match:
             indent = list_match.group(1)
             content = list_match.group(3)
-            return f"{indent}{ORANGE}•{RESET} {self._render_inline(content)}"
+            return f"{indent}{_LIST_MARKER}•{RESET} {self._render_inline(content)}"
 
         # 有序列表
         olist_match = re.match(r'^(\s*)(\d+)[.)]\s+(.+)$', line)
@@ -164,33 +175,29 @@ class StreamingMarkdownRenderer:
             indent = olist_match.group(1)
             num = olist_match.group(2)
             content = olist_match.group(3)
-            return f"{indent}{ORANGE}{num}.{RESET} {self._render_inline(content)}"
+            return f"{indent}{_LIST_MARKER}{num}.{RESET} {self._render_inline(content)}"
 
         # 引用
         if stripped.startswith(">"):
             content = re.sub(r'^>\s?', '', line)
-            return f"{DIM}│{RESET} {ITALIC}{self._render_inline(content)}{RESET}"
+            return f"{ANSI_MUTED}│{RESET} {_QUOTE_COLOR}{self._render_inline(content)}{RESET}"
 
         # 普通段落
         return self._render_inline(line)
 
     def _render_header(self, level: int, text: str) -> str:
-        colors = {
-            1: f"{BOLD}{ORANGE}", 2: f"{BOLD}\033[38;5;209m",
-            3: f"{BOLD}{LIGHT_ORANGE}", 4: f"{BOLD}{YELLOW}",
-        }
+        w = self._width
+        colors = {1: _H1_COLOR, 2: _H2_COLOR, 3: _H3_COLOR, 4: _H4_COLOR}
         color = colors.get(level, BOLD)
         if level <= 2:
-            width = min(self._width - 2, 60)
+            width = min(w - 2, 60)
             return f"\n{color}{text}{RESET}\n{DIM}{'─' * width}{RESET}"
         return f"\n{color}{text}{RESET}"
 
     def _render_code_block(self) -> str:
-        """用 Rich Syntax 渲染代码块（带语法高亮）。"""
         code = "\n".join(self._code_lines)
         lang = self._code_lang or "text"
 
-        # 映射常见别名
         lang_map = {"sh": "bash", "shell": "bash", "js": "javascript",
                      "ts": "typescript", "py": "python"}
         lang = lang_map.get(lang, lang)
@@ -207,16 +214,16 @@ class StreamingMarkdownRenderer:
                 _console.print(syntax)
             return capture.get().rstrip("\n")
         except Exception:
-            # fallback: 简单框线
             return self._render_code_block_fallback(code)
 
     def _render_code_block_fallback(self, code: str) -> str:
-        width = min(self._width - 4, 80)
+        w = self._width
+        width = min(w - 4, 80)
         lines = [f"{DIM}┌{'─' * (width + 1)}┐{RESET}"]
         for line in code.split("\n"):
             display = line[:width]
             pad = " " * max(0, width - len(display))
-            lines.append(f"{DIM}│{RESET} {BG_CODE}{LIGHT_ORANGE}{display}{pad}{RESET}{DIM}│{RESET}")
+            lines.append(f"{DIM}│{RESET} {BG_CODE}{ANSI_PRIMARY}{display}{pad}{RESET}{DIM}│{RESET}")
         lines.append(f"{DIM}└{'─' * (width + 1)}┘{RESET}")
         return "\n".join(lines)
 
@@ -261,11 +268,10 @@ class StreamingMarkdownRenderer:
 
         num_cols = max(len(r) for r in parsed)
 
-        # 用 Rich Table 构建
         table = Table(
-            border_style=MUTED,
+            border_style=TEXT_MUTED,
             show_header=has_header,
-            header_style=f"bold {ACCENT}",
+            header_style=f"bold {PRIMARY}",
             padding=(0, 1),
             expand=False,
         )
@@ -273,12 +279,10 @@ class StreamingMarkdownRenderer:
         while len(aligns) < num_cols:
             aligns.append("left")
 
-        # 添加列
         if has_header and parsed:
             header_row = parsed[0]
             for j in range(num_cols):
                 col_name = header_row[j] if j < len(header_row) else ""
-                # 去掉 markdown 粗体语法
                 col_name = re.sub(r'\*\*(.+?)\*\*', r'\1', col_name)
                 table.add_column(col_name, justify=aligns[j])
             data_rows = parsed[1:]
@@ -305,7 +309,7 @@ class StreamingMarkdownRenderer:
         # 行内代码
         text = re.sub(
             r'`([^`]+)`',
-            lambda m: f"{BG_CODE}\033[38;5;215m{m.group(1)}{RESET}",
+            lambda m: f"{_CODE_INLINE}{m.group(1)}{RESET}",
             text
         )
         # 粗斜体
@@ -319,7 +323,7 @@ class StreamingMarkdownRenderer:
         # 链接
         text = re.sub(
             r'\[([^\]]+)\]\(([^)]+)\)',
-            lambda m: f"{UNDERLINE}{BLUE}{m.group(1)}{RESET}{DIM}({m.group(2)}){RESET}",
+            lambda m: f"{_LINK_COLOR}{m.group(1)}{RESET}{DIM}({m.group(2)}){RESET}",
             text
         )
         return text

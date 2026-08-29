@@ -1,46 +1,86 @@
-"""统一主题：颜色、样式常量。基于 Rich Style 系统。"""
+"""统一主题：参考 OpenCode 配色方案。
+
+OpenCode 默认主题 dark mode 色板：
+  Primary:    #fab283 (暖桃金)  — assistant 消息左边框、链接、列表标记
+  Secondary:  #5c9cf5 (蓝)      — user 消息左边框、标题
+  Accent:     #9d7cd8 (紫)      — 粗体强调
+  Muted:      #6a6a6a           — 工具调用、注释
+  Border:     #4b4c5c           — 普通边框
+"""
 
 from rich.style import Style
 from rich.theme import Theme
 
-# ─── 品牌色 ───
-ACCENT = "#ff5f00"       # 橙色主色调
-ACCENT_DIM = "#af5f00"   # 暗橙
-ACCENT_BRIGHT = "#ff8700" # 亮橙
-MUTED = "#6c6c6c"        # 灰色辅助文字
-SUCCESS = "#5faf5f"       # 绿色成功
-ERROR = "#d75f5f"         # 红色错误
-WARNING = "#d7af00"       # 黄色警告
-INFO = "#5f87af"          # 蓝色信息
-CODE_BG = "#1c1c1c"       # 代码块背景
+# ─── OpenCode Dark Palette ───
+PRIMARY = "#fab283"        # 暖桃金 — 主色调
+SECONDARY = "#5c9cf5"      # 蓝 — 副色调
+ACCENT = "#9d7cd8"         # 紫 — 第三色
+TEXT = "#e0e0e0"           # 前景文字
+TEXT_MUTED = "#6a6a6a"     # 灰色辅助
+TEXT_EMPHASIZED = "#e5c07b" # 黄 — 强调
+BG = "#212121"             # 背景
+BG_SECONDARY = "#252525"   # 次背景
+BG_DARKER = "#121212"      # 深背景
+BORDER = "#4b4c5c"         # 普通边框
+BORDER_FOCUSED = PRIMARY   # 聚焦边框 = 主色
+BORDER_DIM = "#303030"     # 暗淡边框
+
+# 状态色
+SUCCESS = "#7fd88f"
+ERROR = "#e06c75"
+WARNING = "#f5a742"
+INFO = "#56b6c2"
+
+# Markdown 专用
+MD_HEADING = SECONDARY
+MD_LINK = PRIMARY
+MD_CODE = SUCCESS
+MD_BLOCKQUOTE = TEXT_EMPHASIZED
+MD_LIST = PRIMARY
+MD_STRONG = ACCENT
 
 # ─── Rich Theme ───
 MEGUMIN_THEME = Theme({
+    "primary": Style(color=PRIMARY, bold=True),
+    "secondary": Style(color=SECONDARY, bold=True),
     "accent": Style(color=ACCENT, bold=True),
-    "accent.dim": Style(color=ACCENT_DIM),
-    "accent.bright": Style(color=ACCENT_BRIGHT),
-    "muted": Style(color=MUTED),
+    "muted": Style(color=TEXT_MUTED),
+    "text": Style(color=TEXT),
+    "emphasized": Style(color=TEXT_EMPHASIZED),
     "success": Style(color=SUCCESS),
     "error": Style(color=ERROR, bold=True),
     "warning": Style(color=WARNING),
     "info": Style(color=INFO),
-    "header": Style(color=ACCENT, bold=True),
-    "tool.name": Style(color=ACCENT_DIM, bold=True),
-    "tool.args": Style(color=MUTED),
+    "header": Style(color=SECONDARY, bold=True),
+    "tool.name": Style(color=TEXT_MUTED, bold=True),
+    "tool.args": Style(color=TEXT_MUTED),
     "tool.ok": Style(color=SUCCESS),
     "tool.fail": Style(color=ERROR),
-    "thinking": Style(color=MUTED, italic=True),
-    "banner.logo": Style(color=ACCENT, bold=True),
-    "banner.tag": Style(color=MUTED, italic=True),
-    "banner.info": Style(color=MUTED),
-    "spinner": Style(color=ACCENT),
+    "thinking": Style(color=TEXT_MUTED, italic=True),
+    "banner.logo": Style(color=PRIMARY, bold=True),
+    "banner.tag": Style(color=TEXT_MUTED, italic=True),
+    "banner.info": Style(color=TEXT_MUTED),
+    "spinner": Style(color=PRIMARY),
+    "border": Style(color=BORDER),
+    "border.focused": Style(color=PRIMARY),
 })
 
-# ─── 旧 ANSI 常量（向后兼容过渡期使用） ───
+# ─── ANSI 常量（流式渲染用） ───
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-ORANGE = "\033[38;5;208m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
+ITALIC = "\033[3m"
+
+# 256-color 近似（终端流式输出用）
+ANSI_PRIMARY = "\033[38;5;216m"    # #ffaf87 ≈ #fab283
+ANSI_SECONDARY = "\033[38;5;75m"   # #5fafff ≈ #5c9cf5
+ANSI_ACCENT = "\033[38;5;140m"     # #af87d7 ≈ #9d7cd8
+ANSI_MUTED = "\033[38;5;242m"      # #6c6c6c ≈ #6a6a6a
+ANSI_SUCCESS = "\033[38;5;114m"    # #87d787 ≈ #7fd88f
+ANSI_ERROR = "\033[38;5;168m"      # #d75f87 ≈ #e06c75
+ANSI_WARNING = "\033[38;5;214m"    # #ffaf00 ≈ #f5a742
+ANSI_INFO = "\033[38;5;73m"        # #5fafaf ≈ #56b6c2
+
+# 向后兼容别名
+ACCENT_ANSI = ANSI_PRIMARY
+MUTED_ANSI = ANSI_MUTED
