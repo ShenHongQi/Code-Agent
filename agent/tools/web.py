@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 
 from agent.tools import tool, ToolResult
-from agent.permission import check_permission, PermissionDenied
+from agent.permission import check_tool_permission, PermissionDenied
 
 MAX_CONTENT = 16 * 1024  # 16KB text limit
 
@@ -22,7 +22,7 @@ def web_fetch(url: str, prompt: str = "") -> ToolResult:
         return ToolResult(False, "Error: URL must start with http:// or https://")
 
     try:
-        check_permission(f"curl {url}")
+        check_tool_permission("web_fetch", {"url": url})
     except PermissionDenied as e:
         return ToolResult(False, f"Permission denied: {e}")
 

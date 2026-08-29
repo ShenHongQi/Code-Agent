@@ -52,6 +52,7 @@ class Config:
         self.reflection_enabled: bool = _get("AGENT_REFLECTION", "true", fv).lower() in (
             "1", "true", "yes",
         )
+        self.permission_mode: str = _get("AGENT_PERMISSION_MODE", "auto-edit", fv)
 
     @property
     def usable_context(self) -> int:

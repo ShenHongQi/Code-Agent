@@ -154,6 +154,9 @@ def main() -> None:
     diff.init(workspace, registry)
     proc.init(workspace)
 
+    from agent.permission import init_permission_mode
+    init_permission_mode()
+
     # Memory system
     memory_mgr = MemoryManager(str(workspace.root))
     memory_tool.init(memory_mgr)

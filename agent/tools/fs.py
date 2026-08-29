@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agent.tools import tool, ToolResult
 from agent.workspace import Workspace, FileRegistry, WorkspaceError
+from agent.permission import check_tool_permission, PermissionDenied
 
 _workspace: Workspace | None = None
 _registry: FileRegistry | None = None
@@ -90,6 +91,11 @@ def write_file(path: str, content: str) -> ToolResult:
     except WorkspaceError as e:
         return ToolResult(False, f"Error: {e}")
 
+    try:
+        check_tool_permission("write_file", {"path": path})
+    except PermissionDenied as e:
+        return ToolResult(False, f"Permission denied: {e}")
+
     if resolved.exists():
         return ToolResult(
             False,
@@ -123,6 +129,11 @@ def edit_file(path: str, old_string: str, new_string: str) -> ToolResult:
         _workspace.check_sensitive(resolved)
     except WorkspaceError as e:
         return ToolResult(False, f"Error: {e}")
+
+    try:
+        check_tool_permission("edit_file", {"path": path})
+    except PermissionDenied as e:
+        return ToolResult(False, f"Permission denied: {e}")
 
     if not resolved.is_file():
         return ToolResult(False, f"Error: '{path}' does not exist. Use write_file to create new files.")
@@ -174,6 +185,11 @@ def delete_file(path: str) -> ToolResult:
     except WorkspaceError as e:
         return ToolResult(False, f"Error: {e}")
 
+    try:
+        check_tool_permission("delete_file", {"path": path})
+    except PermissionDenied as e:
+        return ToolResult(False, f"Permission denied: {e}")
+
     if not resolved.exists():
         return ToolResult(False, f"Error: '{path}' does not exist.")
 
@@ -203,6 +219,11 @@ def rename_file(old_path: str, new_path: str) -> ToolResult:
         _workspace.check_sensitive(resolved_new)
     except WorkspaceError as e:
         return ToolResult(False, f"Error: {e}")
+
+    try:
+        check_tool_permission("rename_file", {"old_path": old_path, "new_path": new_path})
+    except PermissionDenied as e:
+        return ToolResult(False, f"Permission denied: {e}")
 
     if not resolved_old.exists():
         return ToolResult(False, f"Error: '{old_path}' does not exist.")

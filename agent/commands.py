@@ -131,7 +131,7 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
         return
 
     # 重放历史
-    ctx.ui.replay_history(messages)
+    ctx.ui.replay_history(messages, model=meta.get("model", ""))
 
     # 替换当前 history 和 session_meta
     from agent.history import History
@@ -291,9 +291,54 @@ def _cmd_plan(ctx: CommandContext, args: str) -> None:
     ctx.ui.info(f"   agent 将分析代码并输出实现方案，等待你的确认。")
 
 
+def _cmd_permissions(ctx: CommandContext, args: str) -> None:
+    """查看或切换权限模式。"""
+    from agent.permission import (
+        PermissionMode, get_permission_mode, set_permission_mode,
+    )
+
+    current = get_permission_mode()
+
+    if not args:
+        from agent.terminal import select_menu
+
+        modes = [
+            ("suggest", "全部操作需确认（最保守）"),
+            ("auto-edit", "文件编辑自动通过，危险命令仍确认"),
+            ("full-auto", "全自动（仅高危/危险仍确认）"),
+        ]
+
+        items = []
+        for val, desc in modes:
+            marker = " ◀" if val == current.value else ""
+            items.append(f"{val:<12} {desc}{marker}")
+
+        idx = select_menu(items, title="选择权限模式:")
+        if idx is None:
+            ctx.ui.info("已取消。")
+            return
+
+        new_mode = PermissionMode(modes[idx][0])
+        set_permission_mode(new_mode)
+        ctx.ui.info(f"权限模式已切换: {new_mode.value} — {modes[idx][1]}")
+        return
+
+    mode_str = args.strip().lower()
+    try:
+        new_mode = PermissionMode(mode_str)
+    except ValueError:
+        ctx.ui.warning(f"未知模式: {mode_str}")
+        ctx.ui.info("可选: suggest / auto-edit / full-auto")
+        return
+
+    set_permission_mode(new_mode)
+    ctx.ui.info(f"权限模式已切换: {new_mode.value}")
+
+
 register("help", _cmd_help, "显示所有可用命令", aliases=["h", "?"])
 register("think", _cmd_think, "展开上一轮中间思考", aliases=["thinking"])
 register("resume", _cmd_resume, "恢复历史会话", aliases=["r"])
 register("skill", _cmd_skill, "执行预定义工作流", aliases=["s"])
 register("goal", _cmd_goal, "自动目标模式", aliases=["g"])
 register("plan", _cmd_plan, "设计方案模式", aliases=["p"])
+register("permissions", _cmd_permissions, "查看/切换权限模式", aliases=["perm"])
