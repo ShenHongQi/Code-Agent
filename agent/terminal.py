@@ -19,6 +19,8 @@ ORANGE = "\033[38;5;216m"       # #ffaf87 ≈ Primary #fab283
 RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
 
+MAX_UI_WIDTH = 90
+
 
 class EscInterrupt(Exception):
     """ESC 键触发的中断。"""
@@ -84,7 +86,7 @@ class InputManager:
 
     def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示上下分隔线框住的输入区域。检测 / 开头触发命令补全。"""
-        width = shutil.get_terminal_size().columns
+        width = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
         sep = f"{ORANGE}{'─' * width}{RESET}"
 
         # 画框架
@@ -257,7 +259,7 @@ class InputManager:
             return "ESC"
 
         def _render():
-            cols = shutil.get_terminal_size().columns
+            cols = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
 
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {buffer}{RESET}")
@@ -303,7 +305,7 @@ class InputManager:
             sys.stdout.flush()
 
         def _finish(result: str):
-            cols = shutil.get_terminal_size().columns
+            cols = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
             sys.stdout.write(f"\033[J")

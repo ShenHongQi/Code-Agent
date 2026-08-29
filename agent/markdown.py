@@ -42,9 +42,11 @@ _QUOTE_COLOR = f"{ITALIC}{ANSI_ACCENT}"         # 引用用强调色
 
 _console = Console(theme=MEGUMIN_THEME, highlight=False, force_terminal=True)
 
+MAX_RENDER_WIDTH = 90
+
 
 def _get_width() -> int:
-    return shutil.get_terminal_size().columns
+    return min(shutil.get_terminal_size().columns, MAX_RENDER_WIDTH)
 
 
 class StreamingMarkdownRenderer:
