@@ -2,7 +2,7 @@
 
 > 本文是施工蓝图，也是答辩底稿。考核明确指出面试重点是"你是否理解你的 agent 为什么这样运转，是否能为你的设计决策给出辩护"，因此文中每个设计点都写成 **决策 / 被拒绝的替代方案 / 理由** 三段式。只写结论的文档在答辩时没有价值。
 
-技术选型：**Python 3.13**；自研 provider 抽象层对接 OpenAI 兼容网关，默认 DeepSeek；运行时依赖只有一个 HTTP client。
+技术选型：**Python 3.13**，约 5300 行；自研 provider 抽象层对接 OpenAI 兼容网关，默认 DeepSeek；运行时依赖只有一个 HTTP client。
 
 ---
 
@@ -35,27 +35,43 @@ agent/
   context.py      token 估算校准 + compaction
   loop.py         agent loop 与终止条件
   workspace.py    路径收敛 + FileRegistry 文件新鲜度
-  permission.py   危险操作分级与确认门
+  permission.py   危险操作分级与确认门（+ skill 自动审批集成）
   shell.py        ShellRunner：超时、进程组 kill、有界输出
   ui.py           ANSI 流式渲染
   prompts.py      system prompt 与 subagent prompt
+  terminal.py     终端输入管理、斜杠命令两级自动补全、CJK 宽度适配
+  commands.py     斜杠命令分发系统（help/think/resume/skill）
+  session.py      会话持久化、JSON 序列化/反序列化、按工作区索引
+  memory.py       跨会话记忆管理（工作区记忆目录）
+  banner.py       启动 banner 与环境状态显示
+  markdown.py     Markdown 终端渲染
+  hooks.py        生命周期钩子
+  plugins.py      插件加载
+  skills/
+    __init__.py   Skill 引擎：注册/解析/执行/自动审批/远程安装
+    *.md          11 个内置 skill（YAML frontmatter + Markdown prompt）
   tools/
     __init__.py   @tool registry、schema 生成、参数校验、dispatch
-    fs.py         read_file / write_file / edit_file
+    fs.py         read_file / write_file / edit_file / delete_file / rename_file / list_dir
+    diff.py       multi_edit / view_diff
     search.py     glob / grep
     bash.py       bash
     todo.py       todo_write
     task.py       task（子代理）
+    web.py        web_fetch
+    memory.py     memory_write / memory_read / memory_forget
+    proc.py       spawn / proc_status / proc_kill（后台进程管理）
+    control.py    extend_iterations（动态扩展迭代上限）
 tests/
 .env.example
 requirements.txt
 ```
 
-**决策**：扁平的单层 `agent/` 包，模块按职责切分，唯一嵌套是 `tools/`。
+**决策**：扁平的单层 `agent/` 包，模块按职责切分，嵌套子包只有 `tools/` 和 `skills/`。
 
 **被拒绝的替代方案**：`core/` + `infra/` + `domain/` 的分层结构；或按框架概念命名（`chains/`、`memory/`、`agents/executor.py`）。
 
-**理由**：两条。其一，这是个约 2500 行的程序，分层目录只会增加跳转成本而不增加清晰度——真正的边界是模块间的函数签名，不是文件夹。其二也更重要：**目录结构本身是答辩材料**。出现 `chains/`、`memory/` 会让人第一眼怀疑这是 LangChain 的克隆；而 `loop.py`、`context.py`、`stream.py` 这样的命名读起来就是一个手写程序，模块名直接对应 §1 表格里题目要求的自研项。
+**理由**：两条。其一，分层目录只会增加跳转成本而不增加清晰度——真正的边界是模块间的函数签名，不是文件夹。其二也更重要：**目录结构本身是答辩材料**。出现 `chains/`、`memory/` 会让人第一眼怀疑这是 LangChain 的克隆；而 `loop.py`、`context.py`、`stream.py` 这样的命名读起来就是一个手写程序，模块名直接对应 §1 表格里题目要求的自研项。`skills/` 作为子包是因为它同时承载代码（`__init__.py`）和数据（`*.md` skill 模板）。
 
 ---
 
@@ -164,11 +180,24 @@ registry 从签名推出 `type`（`str`→string、`int`→integer、`bool`→bo
 | `read_file` | 路径收敛；默认 2000 行 / 40K 字符封顶；带行号返回（便于模型引用）；写入 FileRegistry |
 | `write_file` | 仅用于新建文件；已存在则要求改用 `edit_file`，防止整文件覆盖丢内容 |
 | `edit_file` | 精确唯一字符串替换；强制 read-before-edit；mtime 校验（见 §5.4） |
+| `multi_edit` | 多位置批量编辑，一次调用修改文件中多处 |
+| `view_diff` | 查看文件 diff |
+| `delete_file` | 删除文件（路径收敛 + 权限检查） |
+| `rename_file` | 重命名/移动文件（路径收敛 + 权限检查） |
+| `list_dir` | 列出目录内容（路径收敛） |
 | `glob` | 按模式列路径，200 条封顶，按 mtime 排序（新改的文件更可能相关） |
 | `grep` | 正则搜内容，100 匹配封顶、单行 400 字符截断 |
 | `bash` | 见 §6.3 |
+| `spawn` | 后台启动长运行进程（dev server、watcher 等），返回 proc_id |
+| `proc_status` | 查看后台进程输出与状态 |
+| `proc_kill` | 终止后台进程 |
 | `todo_write` | 多步任务的显式计划，写进 history 作为模型的外部记忆锚点 |
 | `task` | 派生只读子代理，见 §7 |
+| `web_fetch` | 获取网页内容（URL 抓取 + HTML 转文本） |
+| `memory_write` | 写入跨会话记忆到工作区记忆目录 |
+| `memory_read` | 读取跨会话记忆 |
+| `memory_forget` | 删除跨会话记忆条目 |
+| `extend_iterations` | 动态扩展当前轮次的迭代上限 |
 
 ### 4.5 `edit_file`：为什么是精确字符串替换
 
@@ -425,7 +454,149 @@ class Provider(Protocol):
 
 ---
 
-## 11. 关键默认值
+## 11. 终端交互系统
+
+### 11.1 斜杠命令
+
+**决策**：输入 `/` 触发命令自动补全下拉框，4 个核心命令：`/help`、`/think`、`/resume`、`/skill`。命令系统通过 `register()` 注册，`dispatch()` 分发。
+
+**被拒绝的替代方案**：直接在 REPL 主循环里用 if-elif 匹配。
+
+**理由**：register + dispatch 模式让新增命令只需一行注册调用，不碰分发逻辑。更重要的是，注册信息（名称、描述、别名）复用为自动补全的数据源——下拉框的选项列表与命令实现是同一份声明，不会漂移。
+
+### 11.2 两级自动补全
+
+输入 `/` 弹出命令下拉框；选择 `/skill` 后自动填入 `/skill ` 并切换为 skill 名称下拉框。
+
+**技术难点——终端原始输入**：
+
+常规 `input()` 拿不到单个按键事件。实现使用 `termios` + `tty.setcbreak()` 进入半原始模式，用 `os.read(fd, ...)` 逐字节读取。
+
+**关键修复——方向键识别**：方向键是多字节转义序列（如 `\033[A`），最初使用 `sys.stdin.read(1)` + `select()` 检测后续字节。但 Python 的 `sys.stdin.read()` 有内部缓冲区，它一次性从 OS 读走了完整的 `\033[A`（3 字节），第一个字节返回给调用者，剩下 2 字节留在 Python 缓冲区里。此时 `select()` 检查的是 OS 层 fd——已经空了——于是判定为裸 ESC。
+
+**解决方案**：`_slash_input` 内全部 I/O 改用 `os.read(fd, ...)` 绕过 Python 缓冲层，用 `fcntl` + `O_NONBLOCK` 做非阻塞 peek 检测后续字节。`_read_key()` 函数封装了完整的按键识别：普通字符、方向键（`\033[A/B/C/D`）、裸 ESC。
+
+### 11.3 CJK 宽度适配
+
+中日韩字符在终端占 2 列宽度。下拉框的边框对齐依赖准确的可视宽度计算。
+
+**决策**：`_visual_width(s)` 用 `unicodedata.east_asian_width()` 判定每个字符宽度（W/F = 2，其余 = 1）。所有下拉框渲染用 `_visual_width()` 计算填充量，`_truncate_to_width()` 做精确截断。
+
+### 11.4 下拉框渲染
+
+**决策**：每次 `_render()` 用 `\033[J`（清除光标以下）清空旧内容，重新绘制边框和选项，再用 `\033[{n}A` 回到输入行。
+
+**被拒绝的替代方案**：`\033[s`/`\033[u`（光标保存/恢复）。
+
+**理由**：当终端发生滚动时，保存的绝对光标位置失效——恢复后光标跑到错误的行。相对移动 `\033[{n}A` 只依赖"刚才画了几行"，不受滚动影响。
+
+---
+
+## 12. Skill 系统
+
+### 12.1 设计目标
+
+Skill 是预定义的工作流模板：一段精心编写的 prompt + 元数据（名称、描述、别名、是否自动审批）。执行 skill 时，prompt 注入用户参数后直接送入 agent loop，自动审批模式下工具调用无需用户逐次确认。
+
+**这不是插件系统。** Skill 不引入新的工具、不改变 agent 的能力边界——它只是提供了一个高质量的起始 prompt，让 agent 用已有工具按特定工作流执行。这个定位是有意的：增加能力的方式应该是增加工具（§4），而不是增加 prompt 的魔法。
+
+### 12.2 三层 Skill 来源
+
+| 层级 | 路径 | 加载时机 |
+|---|---|---|
+| 内置 | `agent/skills/*.md` | 模块初始化时自动加载 |
+| 用户自定义 | `~/.megumin/skills/*.md` 或 `*.yaml` | 模块初始化时自动加载 |
+| 远程安装 | `/skill install <url>` | 用户手动触发，保存到用户目录 |
+
+用户自定义 skill 同名时不会覆盖内置 skill（先注册先得）。
+
+### 12.3 Skill 文件格式
+
+```markdown
+---
+name: review
+description: 审查代码变更，给出改进建议
+aliases: [cr]
+auto_approve: true
+---
+
+你是一个资深代码审查者。请审查以下代码变更：
+
+{args}
+
+## 审查维度
+...
+```
+
+YAML frontmatter + Markdown body。`{args}` 和 `{workspace}` 是运行时替换的占位符。
+
+**决策**：自研简单 YAML 解析器（约 30 行），不依赖 `pyyaml`。
+
+**理由**：skill frontmatter 只用到 4 种值类型（字符串、布尔、列表、无值），且格式完全受控（内置 skill 由开发者编写，用户 skill 有模板引导）。为这个子集引入 `pyyaml` 会在依赖清单上增加一行——而依赖清单本身是合规论证的一部分（§10）。
+
+### 12.4 自动审批
+
+**决策**：使用 `threading.local()` 存储当前线程的 auto_approve 标志。skill 执行前设置，`finally` 块中清除。`permission.py` 的 `check_permission()` 检测到该标志时跳过用户确认（危险命令如 `rm -rf /` 仍然被阻断）。
+
+**理由**：thread-local 保证 skill 的自动审批不会泄漏到其他线程或后续的非 skill 对话轮次。`finally` 保证异常和中断路径也能清除——这与 §3.2 的 `seal_pending_tool_calls` 是同一个模式：用语言级保证覆盖所有退出路径。
+
+### 12.5 远程安装
+
+`/skill install <url>` 支持从 GitHub 文件链接、GitHub Gist、任意直链 URL 下载 skill 文件。
+
+- GitHub blob URL（`github.com/.../blob/...`）自动转换为 `raw.githubusercontent.com` 直链
+- Gist URL 自动转换为 raw 下载地址
+- `.cursorrules` 格式自动转换为 megumin skill `.md` 格式（追加 frontmatter + `{args}` 占位符）
+
+下载后解析验证，保存到 `~/.megumin/skills/` 并立即注册可用，无需重启。
+
+**决策**：使用标准库 `urllib.request` 下载，不引入 `requests`。
+
+**理由**：与 `transport.py`（§10 的 raw 回退）一致——标准库够用的场景不加依赖。
+
+### 12.6 内置 Skill 清单
+
+11 个内置 skill 覆盖常见开发工作流：
+
+| Skill | 定位 |
+|---|---|
+| `review` | 代码审查 |
+| `test` | 测试生成 |
+| `explain` | 代码解释 |
+| `commit` | 生成 commit message 并提交 |
+| `fix` | 问题分析与修复 |
+| `refactor` | 代码重构 |
+| `doc` | 文档生成/更新 |
+| `push` | 提交并推送 |
+| `init` | 项目初始化 |
+| `frontend` | 前端全流程（React/Vue/Next.js/样式/状态/测试/构建） |
+| `backend` | 后端全流程（API/数据库/认证/安全/测试/部署） |
+
+其中 `frontend` 和 `backend` 是生产级的全流程 skill：自动识别项目技术栈，覆盖从需求分析到质量验收的完整工作流。
+
+---
+
+## 13. 会话与记忆
+
+### 13.1 会话持久化
+
+**决策**：每轮对话结束后将 history 序列化为 JSON，按工作区路径索引存储在 `~/.megumin/sessions/`。`/resume` 命令列出当前工作区的历史会话，用户选择后反序列化恢复。
+
+恢复时重建 system prompt（因为工作区文件可能已变化）并替换当前 history，对话可以无缝继续。
+
+### 13.2 跨会话记忆
+
+通过 `memory_write` / `memory_read` / `memory_forget` 三个工具，agent 可以在工作区的 `.megumin/memory/` 目录下读写持久化记忆。
+
+**用途**：记住项目偏好（"这个项目用 4 空格缩进"）、技术决策（"选了 Redis 做缓存"）、待办事项等。下次在同一工作区启动时，system prompt 会注入已有记忆作为上下文。
+
+**决策**：记忆是纯文本文件而非数据库。
+
+**理由**：用户可以直接用编辑器查看、修改、删除记忆——透明性比查询效率重要。记忆条目的规模不会超过几十条（超过了说明该用文档而不是记忆），文件系统足够。
+
+---
+
+## 14. 关键默认值
 
 可直接落进 `config.py`：
 
@@ -445,7 +616,7 @@ estimator               CJK 1.0/字，其余 len/3.6，每消息 +4，SAFETY_FAC
 
 ---
 
-## 12. 施工顺序（5.5 天）
+## 15. 施工顺序（5.5 天）
 
 原则：**每一步都产出可提交、可演示的增量**。评委会读提交历史了解开发过程，因此历史应当反映真实的推进顺序，而不是最后一次性倒进去。
 
@@ -467,7 +638,7 @@ D1 当天录备份 demo 同理——一个功能少但确实能跑的演示视�
 
 ---
 
-## 13. 高风险项与对策
+## 16. 高风险项与对策
 
 **1. compaction 破坏 tool_call/tool_result 配对**
 最可能真正炸掉演示的一项，三种破法见 §5.4。
@@ -487,14 +658,16 @@ D1 当天录备份 demo 同理——一个功能少但确实能跑的演示视�
 
 **4.5（半个）scope creep 吃掉交付物**
 5.5 天硬时钟，而完整版有 8 个工具 + 压缩 + 子代理。
-对策：D1 vertical slice + §12 的裁剪顺序 + D5 中午硬冻结。**三项提交物里有两项不是代码**，必须预留半天。
+对策：D1 vertical slice + §15 的裁剪顺序 + D5 中午硬冻结。**三项提交物里有两项不是代码**，必须预留半天。
 
 ---
 
-## 14. 答辩时最该主动讲的五句话
+## 17. 答辩时最该主动讲的七句话
 
 1. **compaction 的真正驱动力不是 1M 窗口装不下，而是 history 每步被完整重发使单轮成本呈 O(n²)**；顺带还有延迟与中段召回衰减。所以换成大窗口模型也不能省。
 2. **我不需要 tokenizer，我需要一个偏高估的估算器加上服务端自己给的 `usage`。** 一次调用之后它就被校准到该 provider 的真实分词行为，而 400 `context_length_exceeded` 是兜底而不是失败。
 3. **子代理是上下文隔离与成本摊销装置**，不是并行技巧，也不是专家团队隐喻——60K 的探索换 200 token 的结论，省下的是会话余下每一步的边际 token。
 4. **`edit_file` 用精确唯一字符串替换，因为它的失败是安全的**：要么唯一命中，要么什么都不改并告知实际出现次数。行号会漂移、diff 的 hunk header 模型算不对，这两者的失败都是**静默改错位置**。
 5. **对 shell 字符串做静态分类不是安全边界，是防误操作的护栏**；真正的边界在 OS 层，所以 `ShellRunner` 留了 `Sandbox` 接缝，并且 agent 始终跑在 git-clean 的 scratch workspace 上。
+6. **Skill 不是插件——它不引入新能力，只提供高质量的起始 prompt**。自动审批用 thread-local + finally 保证既不泄漏也不丢失，与 `seal_pending_tool_calls` 是同一个安全模式。远程安装只是把 URL 转成本地 `.md` 文件——skill 引擎不区分来源，它只认格式。
+7. **终端方向键问题的根因是 Python 的 I/O 缓冲层与 OS fd 的断层**——`sys.stdin.read(1)` 一次读走了完整的 `\033[A` 三字节，`select()` 检查 OS fd 时已经空了。修复是全程用 `os.read(fd)` 绕过 Python 缓冲，这不是"换个 API"，而是理解了两层缓冲的存在。

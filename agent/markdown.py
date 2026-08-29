@@ -3,6 +3,7 @@
 from __future__ import annotations
 import re
 import shutil
+import unicodedata
 
 # ANSI codes
 RESET = "\033[0m"
@@ -45,6 +46,8 @@ class StreamingMarkdownRenderer:
         self._code_lang = ""
         self._code_lines: list[str] = []
         self._output_lines: list[str] = []
+        self._in_table = False
+        self._table_rows: list[str] = []
         self._width = shutil.get_terminal_size().columns
 
     def feed(self, token: str) -> str:
@@ -73,6 +76,11 @@ class StreamingMarkdownRenderer:
             output += self._render_code_block()
             self._in_code_block = False
             self._code_lines = []
+
+        if self._in_table:
+            output += self._render_table()
+            self._in_table = False
+            self._table_rows = []
 
         return output
 
@@ -132,6 +140,22 @@ class StreamingMarkdownRenderer:
             content = re.sub(r'^>\s?', '', line)
             return f"{DIM}│{RESET} {ITALIC}{self._render_inline(content)}{RESET}"
 
+        # 表格行（含 | 且不是引用块）
+        if "|" in stripped:
+            if not self._in_table:
+                self._in_table = True
+                self._table_rows = []
+            self._table_rows.append(stripped)
+            return None
+
+        # 表格结束（上一行是表格，当前行不是）
+        if self._in_table:
+            rendered = self._render_table()
+            self._in_table = False
+            self._table_rows = []
+            current = self._process_line(line)
+            return rendered + ("\n" + current if current else "")
+
         # 普通段落
         return self._render_inline(line)
 
@@ -164,6 +188,121 @@ class StreamingMarkdownRenderer:
         bottom = f"{DIM}└{'─' * (width + 1)}┘{RESET}"
         lines.append(bottom)
 
+        return "\n".join(lines)
+
+    @staticmethod
+    def _visual_width(s: str) -> int:
+        """计算字符串的终端可视宽度（CJK 字符占 2 列）。"""
+        w = 0
+        for ch in s:
+            if unicodedata.east_asian_width(ch) in ("W", "F"):
+                w += 2
+            else:
+                w += 1
+        return w
+
+    def _render_table(self) -> str:
+        """渲染 Markdown 表格为带边框的终端表格。"""
+        if not self._table_rows:
+            return ""
+
+        def parse_row(row: str) -> list[str]:
+            cells = row.split("|")
+            if cells and not cells[0].strip():
+                cells = cells[1:]
+            if cells and not cells[-1].strip():
+                cells = cells[:-1]
+            return [c.strip() for c in cells]
+
+        def is_separator(row: str) -> bool:
+            return bool(re.match(r'^[\s|:\-]+$', row)) and "--" in row
+
+        parsed: list[list[str]] = []
+        sep_idx = -1
+        aligns: list[str] = []
+
+        for i, row in enumerate(self._table_rows):
+            if is_separator(row):
+                sep_idx = i
+                for cell in parse_row(row):
+                    cell = cell.strip()
+                    if cell.startswith(":") and cell.endswith(":"):
+                        aligns.append("center")
+                    elif cell.endswith(":"):
+                        aligns.append("right")
+                    else:
+                        aligns.append("left")
+                continue
+            parsed.append(parse_row(row))
+
+        if not parsed:
+            return "\n".join(self._table_rows)
+
+        num_cols = max(len(r) for r in parsed)
+        for r in parsed:
+            while len(r) < num_cols:
+                r.append("")
+        while len(aligns) < num_cols:
+            aligns.append("left")
+
+        vw = self._visual_width
+
+        col_widths = [0] * num_cols
+        for r in parsed:
+            for j, cell in enumerate(r):
+                col_widths[j] = max(col_widths[j], vw(cell))
+        col_widths = [max(w, 3) for w in col_widths]
+
+        max_table_w = self._width - 4
+        total = sum(col_widths) + num_cols * 3 + 1
+        if total > max_table_w and num_cols > 0:
+            shrink = (total - max_table_w) // num_cols + 1
+            col_widths = [max(3, w - shrink) for w in col_widths]
+
+        def align_cell(text: str, width: int, alignment: str) -> str:
+            tw = vw(text)
+            if tw > width:
+                # 截断到目标宽度
+                out, cur = "", 0
+                for ch in text:
+                    cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+                    if cur + cw > width:
+                        break
+                    out += ch
+                    cur += cw
+                text = out
+                tw = cur
+            pad = width - tw
+            if alignment == "center":
+                left = pad // 2
+                return " " * left + text + " " * (pad - left)
+            elif alignment == "right":
+                return " " * pad + text
+            return text + " " * pad
+
+        def hline(left: str, mid: str, right: str, fill: str = "─") -> str:
+            segs = [fill * (w + 2) for w in col_widths]
+            return f"{DIM}{left}{mid.join(segs)}{right}{RESET}"
+
+        lines = [hline("┌", "┬", "┐")]
+
+        has_header = sep_idx == 1
+
+        for i, row in enumerate(parsed):
+            cells = []
+            for j, cell in enumerate(row):
+                aligned = align_cell(cell, col_widths[j], aligns[j])
+                if has_header and i == 0:
+                    cells.append(f"{BOLD}{aligned}{RESET}")
+                else:
+                    cells.append(self._render_inline(aligned))
+            inner = f"{DIM}│{RESET}".join(f" {c} " for c in cells)
+            lines.append(f"{DIM}│{RESET}{inner}{DIM}│{RESET}")
+
+            if has_header and i == 0:
+                lines.append(hline("├", "┼", "┤"))
+
+        lines.append(hline("└", "┴", "┘"))
         return "\n".join(lines)
 
     def _render_inline(self, text: str) -> str:

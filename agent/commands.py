@@ -76,20 +76,19 @@ def get_all_commands() -> list[Command]:
 def _cmd_help(ctx: CommandContext, args: str) -> None:
     """列出所有可用命令。"""
     commands = get_all_commands()
-    core = [c for c in commands if not c.description.startswith("[skill]")]
-    skills = [c for c in commands if c.description.startswith("[skill]")]
 
     ctx.ui.info("命令:")
-    for cmd in sorted(core, key=lambda c: c.name):
+    for cmd in sorted(commands, key=lambda c: c.name):
         alias_str = f" ({', '.join('/' + a for a in cmd.aliases)})" if cmd.aliases else ""
         ctx.ui.info(f"  /{cmd.name:<12} {cmd.description}{alias_str}")
 
+    from agent.skills import get_all_skills
+    skills = get_all_skills()
     if skills:
-        ctx.ui.info("\nSkills (自动执行工作流):")
-        for cmd in sorted(skills, key=lambda c: c.name):
-            desc = cmd.description.replace("[skill] ", "")
-            alias_str = f" ({', '.join('/' + a for a in cmd.aliases)})" if cmd.aliases else ""
-            ctx.ui.info(f"  /{cmd.name:<12} {desc}{alias_str}")
+        ctx.ui.info("\nSkills (/skill <name> 执行):")
+        for s in sorted(skills, key=lambda x: x.name):
+            alias_str = f" ({', '.join(s.aliases)})" if s.aliases else ""
+            ctx.ui.info(f"  {s.name:<12} {s.description}{alias_str}")
 
 
 def _cmd_think(ctx: CommandContext, args: str) -> None:
@@ -155,14 +154,20 @@ def _cmd_skill(ctx: CommandContext, args: str) -> None:
             alias_str = f" ({', '.join(s.aliases)})" if s.aliases else ""
             auto_str = " ⚡" if s.auto_approve else ""
             ctx.ui.info(f"  {s.name:<12}{s.description}{alias_str}{auto_str}")
-        ctx.ui.info(f"\n  用法: /skill <name> [参数]  或  /<skill-name> [参数]")
+        ctx.ui.info(f"\n  用法: /skill <name> [参数]")
         ctx.ui.info(f"  ⚡ = 自动审批（无需确认权限）")
-        ctx.ui.info(f"  自定义: {SKILLS_DIR}/*.yaml")
+        ctx.ui.info(f"  安装: /skill install <url>")
+        ctx.ui.info(f"  自定义: {SKILLS_DIR}/*.md")
         return
 
     # /skill create → 创建自定义 skill 模板
     if args.strip() == "create":
         _create_skill_template(ctx)
+        return
+
+    # /skill install <url> → 远程安装 skill
+    if args.strip().startswith("install"):
+        _install_skill(ctx, args.strip()[len("install"):].strip())
         return
 
     # /skill <name> [args...]
@@ -220,39 +225,39 @@ prompt: |
     ctx.ui.info("重启 megumin 后生效。")
 
 
+def _install_skill(ctx: CommandContext, url: str) -> None:
+    """从远程 URL 安装 skill。"""
+    from agent.skills import install_skill
+
+    if not url:
+        ctx.ui.info("用法: /skill install <url>")
+        ctx.ui.info("")
+        ctx.ui.info("支持的来源:")
+        ctx.ui.info("  GitHub 文件  https://github.com/user/repo/blob/main/skill.md")
+        ctx.ui.info("  GitHub Gist  https://gist.github.com/user/hash")
+        ctx.ui.info("  Raw URL      https://example.com/my-skill.md")
+        ctx.ui.info("  Cursorrules  https://github.com/user/repo/blob/main/.cursorrules")
+        ctx.ui.info("")
+        ctx.ui.info("格式: .md（YAML frontmatter）/ .yaml / .cursorrules（自动转换）")
+        return
+
+    if not url.startswith(("http://", "https://")):
+        ctx.ui.warning("请提供完整的 URL（以 http:// 或 https:// 开头）")
+        return
+
+    ctx.ui.info(f"正在下载 skill …")
+
+    skill, message = install_skill(url)
+    if skill:
+        ctx.ui.info(f"✓ {message}")
+        alias_str = f"  别名: {', '.join(skill.aliases)}" if skill.aliases else ""
+        ctx.ui.info(f"  描述: {skill.description}{alias_str}")
+        ctx.ui.info(f"  使用: /skill {skill.name} [参数]")
+    else:
+        ctx.ui.error(f"✗ {message}")
+
+
 register("help", _cmd_help, "显示所有可用命令", aliases=["h", "?"])
 register("think", _cmd_think, "展开上一轮中间思考", aliases=["thinking"])
 register("resume", _cmd_resume, "恢复历史会话", aliases=["r"])
 register("skill", _cmd_skill, "执行预定义工作流", aliases=["s"])
-
-
-def _register_skill_shortcuts() -> None:
-    """将所有 skill 注册为顶级斜杠命令快捷方式。"""
-    from agent.skills import get_all_skills
-
-    for skill in get_all_skills():
-        # 避免与已注册的命令冲突
-        if skill.name in _commands:
-            continue
-
-        def _make_handler(s):
-            def handler(ctx: CommandContext, args: str) -> None:
-                ctx._skill_executed = True
-                from agent.skills import execute_skill
-                execute_skill(
-                    skill=s,
-                    args=args,
-                    history=ctx.history,
-                    provider=ctx.provider,
-                    ui=ctx.ui,
-                    memory_mgr=ctx.memory_mgr,
-                    workspace_root=ctx.workspace,
-                    thinking_log=ctx.thinking_history,
-                )
-            return handler
-
-        register(skill.name, _make_handler(skill), f"[skill] {skill.description}",
-                 aliases=skill.aliases)
-
-
-_register_skill_shortcuts()

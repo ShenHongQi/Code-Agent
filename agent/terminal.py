@@ -142,7 +142,8 @@ class InputManager:
 
         try:
             tty.setcbreak(fd)
-            first_char = sys.stdin.read(1)
+            first_byte = os.read(fd, 1)
+            first_char = first_byte.decode("utf-8", errors="replace") if first_byte else ""
         except (termios.error, OSError, KeyboardInterrupt):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             raise EOFError()
@@ -172,12 +173,12 @@ class InputManager:
     def _slash_input(self, initial: str = "/", model: str = "") -> str:
         """斜杠命令补全模式：实时下拉框 + 过滤。
 
-        在输入行下方绘制下拉框。每次重绘时先用 \\033[J 清除输入行下方所有内容，
-        然后重新绘制框架底部（分隔线+model）和下拉框，最后用相对移动回到输入行。
-        这种方式不依赖 \\033[s/u 光标保存，对终端滚动免疫。
+        使用 os.read(fd) 做无缓冲读取，避免 Python 层缓冲导致
+        select() 误判 escape sequence 为裸 ESC。
         """
         import termios
         import tty
+        import fcntl
 
         if not sys.stdin.isatty() or os.name == "nt":
             return input(f"{BOLD}{ORANGE}> {RESET}{initial}")
@@ -188,23 +189,64 @@ class InputManager:
         buffer = initial
         selected = 0
 
+        def _in_skill_mode():
+            return buffer.lower().startswith("/skill ") or buffer.lower() == "/skill"
+
         def _get_matches():
+            # 二级补全：/skill 后展开 skill 列表
+            if buffer.lower().startswith("/skill "):
+                from agent.skills import get_all_skills
+                query = buffer[7:].lower()  # "/skill " 之后的部分
+                skills = get_all_skills()
+                if not query:
+                    return [(s.name, s.description) for s in skills]
+                return [(s.name, s.description) for s in skills
+                        if s.name.startswith(query) or any(a.startswith(query) for a in s.aliases)]
+
+            # 一级补全：命令列表
             query = buffer[1:].lower()
             if not query:
                 return self._commands[:]
             return [(n, d) for n, d in self._commands if n.startswith(query)]
 
+        def _read_key() -> str:
+            """读取一个按键（处理多字节 escape sequence）。
+
+            返回:
+              普通字符 → 该字符 (如 'a', '/', '\\r')
+              方向键   → '[A', '[B', '[C', '[D'
+              裸 ESC   → 'ESC'
+              其他转义  → 'ESC'
+            """
+            b = os.read(fd, 1)
+            if not b:
+                return ""
+            ch = b[0]
+
+            if ch != 0x1b:
+                return b.decode("utf-8", errors="replace")
+
+            # 读到 \x1b，用非阻塞读检查是否有后续字节
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            try:
+                rest = os.read(fd, 4)
+            except (BlockingIOError, OSError):
+                rest = b""
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+
+            if rest and rest[0:1] == b"[" and len(rest) >= 2:
+                return rest[:2].decode("ascii", errors="replace")
+            return "ESC"
+
         def _render():
             cols = shutil.get_terminal_size().columns
 
-            # 1. 重绘输入行
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {buffer}{RESET}")
-
-            # 2. 清除输入行下方所有内容
             sys.stdout.write(f"\033[J")
 
-            # 3. 重新绘制框架底部
             lines_below = 0
             sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
             lines_below += 1
@@ -212,18 +254,17 @@ class InputManager:
                 sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
                 lines_below += 1
 
-            # 4. 绘制下拉框
             matches = _get_matches()
+            skill_mode = _in_skill_mode()
             if matches:
-                # box_inner: │和│之间的字符宽度
                 box_inner = min(cols - 8, 48)
-                # 条目可用宽度 = box_inner - 前缀3(" ❯ "或"   ") - 后缀1(" ")
                 entry_max = box_inner - 4
 
                 sys.stdout.write(f"\n  {DIM}┌{'─' * box_inner}┐{RESET}")
                 lines_below += 1
                 for i, (name, desc) in enumerate(matches):
-                    raw_entry = f"/{name}  {desc}"
+                    prefix = "" if skill_mode else "/"
+                    raw_entry = f"{prefix}{name}  {desc}"
                     entry = _truncate_to_width(raw_entry, entry_max)
                     vw = _visual_width(entry)
                     pad = " " * max(0, entry_max - vw)
@@ -239,7 +280,6 @@ class InputManager:
                 sys.stdout.write(f"\n  {DIM}└{'─' * box_inner}┘{RESET}")
                 lines_below += 1
 
-            # 5. 相对移动回输入行
             if lines_below > 0:
                 sys.stdout.write(f"\033[{lines_below}A")
             cursor_col = _visual_width(buffer) + 2
@@ -247,12 +287,10 @@ class InputManager:
             sys.stdout.flush()
 
         def _finish(result: str):
-            """退出时清理：清除下方内容，重绘框架底部，输出结果。"""
             cols = shutil.get_terminal_size().columns
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
             sys.stdout.write(f"\033[J")
-            # 重绘框架底部
             sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
             if model:
                 sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
@@ -264,59 +302,81 @@ class InputManager:
             _render()
 
             while True:
-                ch = sys.stdin.read(1)
+                key = _read_key()
+                if not key:
+                    continue
 
-                if ch == "\x1b":
-                    import select
-                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if r:
-                        seq = sys.stdin.read(2)
-                        matches = _get_matches()
-                        if seq == "[A" and matches:  # 上
-                            selected = (selected - 1) % len(matches)
-                            _render()
-                        elif seq == "[B" and matches:  # 下
-                            selected = (selected + 1) % len(matches)
-                            _render()
-                    else:
-                        # 裸 ESC — 取消
-                        _finish("")
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                        return ""
+                if key == "[A":  # 上
+                    matches = _get_matches()
+                    if matches:
+                        selected = (selected - 1) % len(matches)
+                        _render()
 
-                elif ch in ("\r", "\n"):  # Enter
+                elif key == "[B":  # 下
+                    matches = _get_matches()
+                    if matches:
+                        selected = (selected + 1) % len(matches)
+                        _render()
+
+                elif key == "ESC":  # 裸 ESC — 取消
+                    _finish("")
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    return ""
+
+                elif key in ("\r", "\n"):  # Enter
                     matches = _get_matches()
                     if matches and selected < len(matches):
-                        result = "/" + matches[selected][0]
+                        chosen_name = matches[selected][0]
+                        if _in_skill_mode():
+                            # 二级：选中 skill → 填入名称，用户继续输入参数
+                            buffer = "/skill " + chosen_name + " "
+                            selected = 0
+                            _render()
+                            continue
+                        elif chosen_name == "skill":
+                            # 一级选中 /skill → 进入二级模式
+                            buffer = "/skill "
+                            selected = 0
+                            _render()
+                            continue
+                        else:
+                            result = "/" + chosen_name
                     else:
                         result = buffer
                     _finish(result)
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                     return result
 
-                elif ch in ("\x7f", "\x08"):  # Backspace
+                elif key in ("\x7f", "\x08"):  # Backspace
                     if len(buffer) > 1:
                         buffer = buffer[:-1]
-                        selected = 0
+                        selected = 0  # 重置选择（可能切换了模式）
                         _render()
                     else:
                         _finish("")
                         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                         return ""
 
-                elif ch == "\x03":  # Ctrl+C
+                elif key == "\x03":  # Ctrl+C
                     _finish("")
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                     raise KeyboardInterrupt()
 
-                elif ch == "\t":  # Tab 填充
+                elif key == "\t":  # Tab 填充
                     matches = _get_matches()
                     if matches and selected < len(matches):
-                        buffer = "/" + matches[selected][0]
+                        chosen_name = matches[selected][0]
+                        if _in_skill_mode():
+                            buffer = "/skill " + chosen_name
+                        elif chosen_name == "skill":
+                            buffer = "/skill "
+                            selected = 0
+                        else:
+                            buffer = "/" + chosen_name
                         _render()
 
-                elif ch.isprintable():
-                    buffer += ch
+                elif len(key) == 1 and key.isprintable():
+                    buffer += key
                     selected = 0
                     _render()
 

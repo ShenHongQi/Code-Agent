@@ -84,7 +84,18 @@ def build_system_prompt(workspace_root: str, memory_mgr: "MemoryManager | None" 
     # 1. 基础身份与规则
     sections.append(BASE_PROMPT)
 
-    # 2. 项目记忆
+    # 2. Skill 目录
+    from agent.skills import get_skill_catalog
+    catalog = get_skill_catalog()
+    if catalog:
+        sections.append(
+            "## Available Skills\n"
+            "当用户的请求匹配某个 skill 的触发条件时，主动采用该 skill 的完整工作流来执行任务。\n"
+            "用户也可通过 `/skill <name> [参数]` 手动触发。\n\n"
+            + catalog
+        )
+
+    # 3. 项目记忆
     if memory_mgr:
         project_mem = memory_mgr.load_project()
         if project_mem:
