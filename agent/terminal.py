@@ -22,6 +22,10 @@ ORANGE = "\033[38;5;167m"       # #d75f5f ≈ Primary #e05252 (惠惠红)
 RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
 
+# Readline-safe prompt: \001..\002 wrap non-printable sequences so readline
+# calculates cursor position correctly (required for arrow-key navigation).
+RL_PROMPT = f"\001{BOLD}{ORANGE}\002> \001{RESET}\002"
+
 
 # ─── 终端 Resize 处理 ──────────────────────────────────────────────────────
 
@@ -118,7 +122,20 @@ class InputManager:
     def __init__(self):
         self._readline_available = False
         self._commands: list[tuple[str, str]] = []  # [(name, description), ...]
+        self._ctx_info: str = ""
         self._setup_readline()
+
+    def update_ctx_usage(self, prompt_tokens: int, context_limit: int) -> None:
+        if not prompt_tokens:
+            return
+        pct = prompt_tokens / context_limit * 100 if context_limit else 0
+        def _f(n: int) -> str:
+            if n >= 10_000:
+                return f"{n / 1000:.0f}k"
+            if n >= 1_000:
+                return f"{n / 1000:.1f}k"
+            return str(n)
+        self._ctx_info = f"ctx {_f(prompt_tokens)}/{_f(context_limit)} ({pct:.0f}%)"
 
     def set_commands(self, commands: list[tuple[str, str]]) -> None:
         """设置可用斜杠命令列表，用于自动补全。"""
@@ -162,18 +179,22 @@ class InputManager:
             if not prefill and self._commands and sys.stdin.isatty() and os.name != "nt":
                 result, slash_used = self._input_with_slash_detect(model)
             else:
-                result = input(f"{BOLD}{ORANGE}> {RESET}")
+                result = input(RL_PROMPT)
         finally:
             _set_input_resize_cb(None)
             if self._readline_available:
                 self._readline.set_startup_hook()
 
+        result = result.strip()
         if not slash_used:
-            down = 2 if model else 1
-            sys.stdout.write(f"\033[{down}B\r")
+            sys.stdout.write("\033[1A\r\033[J")
+            if result:
+                _BG = "\033[48;5;236m"
+                for ln in result.split("\n"):
+                    sys.stdout.write(f"{_BG} {BOLD}{ORANGE}>{RESET}{_BG} {ln}\033[K{RESET}\n")
             sys.stdout.flush()
 
-        return result.strip()
+        return result
 
     def _draw_input_frame(self, model: str = "", *, leading_newline: bool = True) -> None:
         """绘制输入区域框架：上分隔线 + 输入行 + 下分隔线 + model，光标停在输入行。
@@ -189,10 +210,19 @@ class InputManager:
             sys.stdout.write(f"{sep}\n")
         sys.stdout.write("\n")
         sys.stdout.write(f"{sep}\n")
-        if model:
-            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
+        has_info = model or self._ctx_info
+        if has_info:
+            left = f"  model: {model}" if model else ""
+            right = self._ctx_info
+            if left and right:
+                pad = max(2, width - len(left) - len(right))
+                sys.stdout.write(f"{DIM}{left}{' ' * pad}{right}{RESET}\n")
+            elif left:
+                sys.stdout.write(f"{DIM}{left}{RESET}\n")
+            else:
+                sys.stdout.write(f"{DIM}{right:>{width}}{RESET}\n")
 
-        up = 3 if model else 2
+        up = 3 if has_info else 2
         sys.stdout.write(f"\033[{up}A\r")
         sys.stdout.flush()
 
@@ -215,7 +245,30 @@ class InputManager:
         try:
             tty.setcbreak(fd)
             first_byte = os.read(fd, 1)
-            first_char = first_byte.decode("utf-8", errors="replace") if first_byte else ""
+            if first_byte and first_byte[0] == 0x1B:
+                # Escape sequence (arrow key, etc.) — drain remaining bytes and ignore
+                import fcntl
+                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                try:
+                    os.read(fd, 8)
+                except (BlockingIOError, OSError):
+                    pass
+                finally:
+                    fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+                first_char = ""
+            elif first_byte and first_byte[0] >= 0xC0:
+                # Multi-byte UTF-8 — read remaining continuation bytes
+                n = 1 if first_byte[0] < 0xE0 else (2 if first_byte[0] < 0xF0 else 3)
+                data = first_byte
+                for _ in range(n):
+                    extra = os.read(fd, 1)
+                    if not extra:
+                        break
+                    data += extra
+                first_char = data.decode("utf-8", errors="replace")
+            else:
+                first_char = first_byte.decode("utf-8", errors="replace") if first_byte else ""
         except (termios.error, OSError, KeyboardInterrupt):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             raise EOFError()
@@ -227,7 +280,7 @@ class InputManager:
             return (result, True)
 
         # 非 / 开头：用 readline 继续
-        if self._readline_available:
+        if first_char and self._readline_available:
             self._readline.set_startup_hook(
                 lambda: self._readline.insert_text(first_char)
             )
@@ -235,7 +288,7 @@ class InputManager:
         try:
             sys.stdout.write("\r\033[K")
             sys.stdout.flush()
-            result = input(f"{BOLD}{ORANGE}> {RESET}")
+            result = input(RL_PROMPT)
         finally:
             if self._readline_available:
                 self._readline.set_startup_hook()
@@ -260,6 +313,7 @@ class InputManager:
 
         buffer = initial
         selected = 0
+        cursor = len(initial)
 
         def _in_skill_mode():
             return buffer.lower().startswith("/skill ") or buffer.lower() == "/skill"
@@ -370,19 +424,16 @@ class InputManager:
 
             if lines_below > 0:
                 sys.stdout.write(f"\033[{lines_below}A")
-            cursor_col = _visual_width(buffer) + 2
+            cursor_col = _visual_width(buffer[:cursor]) + 2
             sys.stdout.write(f"\r\033[{cursor_col}C")
             sys.stdout.flush()
 
         def _finish(result: str):
-            cols = shutil.get_terminal_size().columns
-            sys.stdout.write("\r\033[K")
-            sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
-            sys.stdout.write("\033[J")
-            sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
-            if model:
-                sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
-            sys.stdout.write("\n")
+            sys.stdout.write("\033[1A\r\033[J")
+            if result:
+                _BG = "\033[48;5;236m"
+                for ln in result.split("\n"):
+                    sys.stdout.write(f"{_BG} {BOLD}{ORANGE}>{RESET}{_BG} {ln}\033[K{RESET}\n")
             sys.stdout.flush()
 
         try:
@@ -423,6 +474,16 @@ class InputManager:
                         selected = (selected + 1) % len(matches)
                         _render()
 
+                elif key == "[C":  # 右
+                    if cursor < len(buffer):
+                        cursor += 1
+                        _render()
+
+                elif key == "[D":  # 左
+                    if cursor > 0:
+                        cursor -= 1
+                        _render()
+
                 elif key == "ESC":  # 裸 ESC — 取消
                     _finish("")
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -436,12 +497,14 @@ class InputManager:
                             # 二级：选中 skill → 填入名称，用户继续输入参数
                             buffer = "/skill " + chosen_name + " "
                             selected = 0
+                            cursor = len(buffer)
                             _render()
                             continue
                         elif chosen_name == "skill":
                             # 一级选中 /skill → 进入二级模式
                             buffer = "/skill "
                             selected = 0
+                            cursor = len(buffer)
                             _render()
                             continue
                         else:
@@ -453,11 +516,12 @@ class InputManager:
                     return result
 
                 elif key in ("\x7f", "\x08"):  # Backspace
-                    if len(buffer) > 1:
-                        buffer = buffer[:-1]
-                        selected = 0  # 重置选择（可能切换了模式）
+                    if cursor > 0 and len(buffer) > 1:
+                        buffer = buffer[:cursor - 1] + buffer[cursor:]
+                        cursor -= 1
+                        selected = 0
                         _render()
-                    else:
+                    elif len(buffer) <= 1:
                         _finish("")
                         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                         return ""
@@ -478,10 +542,12 @@ class InputManager:
                             selected = 0
                         else:
                             buffer = "/" + chosen_name
+                        cursor = len(buffer)
                         _render()
 
                 elif len(key) == 1 and key.isprintable():
-                    buffer += key
+                    buffer = buffer[:cursor] + key + buffer[cursor:]
+                    cursor += 1
                     selected = 0
                     _render()
 

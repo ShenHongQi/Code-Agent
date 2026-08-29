@@ -328,13 +328,10 @@ class UI:
 
     def _replay_user_input(self, content: str, model: str = "") -> None:
         content = self._sanitize(content)
-        width = _term_width()
-        sep = f"{ANSI_PRIMARY}{'─' * width}{RESET}"
-        sys.stdout.write(f"\n{sep}\n")
-        sys.stdout.write(f"{BOLD}{ANSI_PRIMARY}> {RESET}{content}\n")
-        sys.stdout.write(f"{sep}\n")
-        if model:
-            sys.stdout.write(f"{DIM}  model: {model}{RESET}\n")
+        _BG = "\033[48;5;236m"
+        sys.stdout.write("\n")
+        for line in content.split("\n"):
+            sys.stdout.write(f"{_BG} {BOLD}{ANSI_PRIMARY}>{RESET}{_BG} {line}\033[K{RESET}\n")
         sys.stdout.flush()
 
     def _replay_tool_calls(self, tool_calls: list[dict], tool_results: dict[str, str]) -> None:
@@ -378,6 +375,25 @@ class UI:
         sys.stdout.write(rendered)
         sys.stdout.write("\n")
         sys.stdout.flush()
+
+    # ─── Token 用量 ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt_tokens(n: int) -> str:
+        if n >= 10_000:
+            return f"{n / 1000:.0f}k"
+        if n >= 1_000:
+            return f"{n / 1000:.1f}k"
+        return str(n)
+
+    def show_usage(self, prompt_tokens: int, completion_tokens: int, context_limit: int) -> None:
+        if not prompt_tokens:
+            return
+        pct = prompt_tokens / context_limit * 100 if context_limit else 0
+        ctx_str = f"{self._fmt_tokens(prompt_tokens)}/{self._fmt_tokens(context_limit)}"
+        self._console.print(
+            f"[muted]  ctx {ctx_str} ({pct:.0f}%) · output {self._fmt_tokens(completion_tokens)}[/muted]"
+        )
 
     # ─── 通用消息 ─────────────────────────────────────────────────────
 
