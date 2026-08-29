@@ -8,7 +8,7 @@ import sys
 
 from agent.config import config
 
-# ─── 终端 resize 全局状态 ───
+# ─── 终端 resize 处理 ───
 _resize_pending = False
 _banner_params: dict = {}
 
@@ -21,20 +21,36 @@ def _install_resize_handler(model: str, workspace: str) -> None:
 
 
 def _on_sigwinch(signum, frame):
+    """SIGWINCH handler：窗口变化时立即清屏重绘 banner。
+
+    Python 信号处理器在主线程字节码间隙执行，可以安全做 I/O。
+    Spinner 线程可能短暂闪烁，但会在下一帧自动恢复。
+    """
     global _resize_pending
-    _resize_pending = True
+    try:
+        from agent.banner import render_banner
+        sys.stdout.write("\033[2J\033[H")  # 清屏 + 光标归位
+        sys.stdout.write(render_banner(**_banner_params))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        _resize_pending = False
+    except Exception:
+        _resize_pending = True  # 回退：等 _flush_resize() 处理
 
 
 def _flush_resize() -> None:
-    """若有待处理的 resize，清屏并重绘 banner。在每次等待输入前调用。"""
+    """安全网：若信号处理器失败，在等待输入前补一次清屏重绘。"""
     global _resize_pending
     if not _resize_pending:
         return
     _resize_pending = False
-    from agent.banner import render_banner
-    sys.stdout.write("\033[2J\033[H")  # 清屏 + 光标归位
-    sys.stdout.flush()
-    print(render_banner(**_banner_params))
+    try:
+        from agent.banner import render_banner
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+        print(render_banner(**_banner_params))
+    except Exception:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
