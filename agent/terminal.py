@@ -17,7 +17,7 @@ HISTORY_SIZE = 1000
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-ORANGE = "\033[38;5;216m"       # #ffaf87 ≈ Primary #fab283
+ORANGE = "\033[38;5;167m"       # #d75f5f ≈ Primary #e05252 (惠惠红)
 RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
 
@@ -26,6 +26,7 @@ YELLOW = "\033[33m"
 
 _resize_banner_cb: Callable | None = None   # 重绘 banner
 _resize_input_cb: Callable | None = None    # 重绘当前输入区域
+_resize_stream_cb: Callable | None = None   # 重绘流式输出内容
 _prev_sigwinch = None                       # 保存之前的 handler (readline)
 
 
@@ -44,15 +45,31 @@ def _set_input_resize_cb(cb: Callable | None) -> None:
     _resize_input_cb = cb
 
 
+def set_resize_stream_cb(cb: Callable | None) -> None:
+    """注册/取消流式输出的 resize 回调。由 UI 在流式输出期间调用。"""
+    global _resize_stream_cb
+    _resize_stream_cb = cb
+
+
 def _handle_sigwinch(signum, frame):
-    """SIGWINCH 信号处理：立即清屏 + 重绘 banner + 重绘输入区域。"""
+    """SIGWINCH 信号处理：只重绘当前活跃区域，不清屏、不清 scrollback。
+
+    输入状态：擦除输入框（3-4 行），新宽度重绘。
+    流式状态：擦除当前可见流式内容，新宽度重新渲染已累积文本。
+    其他状态：什么都不做（旧内容已定，新输出会用新宽度）。
+    """
     try:
-        sys.stdout.write("\033[2J\033[H")  # 清屏 + 光标归位
-        sys.stdout.flush()
-        if _resize_banner_cb:
-            _resize_banner_cb()
         if _resize_input_cb:
+            # 输入框: sep + input + sep + model，光标在 input 行
+            # 上移 1 行到 top sep，清到屏幕底部，callback 用 leading_newline=False 重绘
+            sys.stdout.write("\033[A\r\033[J")
+            sys.stdout.flush()
             _resize_input_cb()
+        elif _resize_stream_cb:
+            # 流式输出：只清可见区域（不清 scrollback），重绘累积内容
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
+            _resize_stream_cb()
     except Exception:
         pass
     # 链式调用之前的 handler（如 readline 的），让其更新内部终端宽度
@@ -137,7 +154,7 @@ class InputManager:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
         # 注册 resize 回调：SIGWINCH 时重绘输入框
-        _set_input_resize_cb(lambda: self._draw_input_frame(model))
+        _set_input_resize_cb(lambda: self._draw_input_frame(model, leading_newline=False))
 
         slash_used = False
         try:
@@ -157,12 +174,18 @@ class InputManager:
 
         return result.strip()
 
-    def _draw_input_frame(self, model: str = "") -> None:
-        """绘制输入区域框架：上分隔线 + 输入行 + 下分隔线 + model，光标停在输入行。"""
+    def _draw_input_frame(self, model: str = "", *, leading_newline: bool = True) -> None:
+        """绘制输入区域框架：上分隔线 + 输入行 + 下分隔线 + model，光标停在输入行。
+
+        leading_newline=False 用于 resize 重绘——光标已在 top sep 位置，无需额外换行。
+        """
         width = shutil.get_terminal_size().columns
         sep = f"{ORANGE}{'─' * width}{RESET}"
 
-        sys.stdout.write(f"\n{sep}\n")
+        if leading_newline:
+            sys.stdout.write(f"\n{sep}\n")
+        else:
+            sys.stdout.write(f"{sep}\n")
         sys.stdout.write("\n")
         sys.stdout.write(f"{sep}\n")
         if model:
