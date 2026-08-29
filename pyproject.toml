@@ -3,7 +3,7 @@ name = "coding-agent"
 version = "0.1.0"
 description = "A coding agent that reads/writes files and executes commands via LLM."
 requires-python = ">=3.11"
-dependencies = ["openai>=1.0.0"]
+dependencies = ["openai>=1.0.0", "rich>=13.0.0"]
 
 [project.scripts]
 megumin = "agent.__main__:main"
