@@ -156,7 +156,7 @@ def main() -> None:
     diff.init(workspace, registry)
     proc.init(workspace)
 
-    from agent.permission import init_permission_mode
+    from agent.permission import init_permission_mode, set_spinner_control
     init_permission_mode()
 
     # Memory system
@@ -185,6 +185,7 @@ def main() -> None:
     memory_mgr.has_changed()
 
     ui = UI(stream=not config.no_stream)
+    set_spinner_control(lambda: ui._stop_spinner())
     input_mgr = InputManager()
 
     # Goal & Plan managers
@@ -241,6 +242,8 @@ def main() -> None:
                     auto_input, history, provider, ui, memory_mgr,
                     str(workspace.root), esc_detector.event, thinking_history
                 )
+                if result:
+                    input_mgr.update_ctx_usage(result.prompt_tokens, config.usable_context)
                 if not goal_mgr.should_auto_continue(result, history):
                     ui.info(f"\n🎯 目标完成或已达自动迭代上限 ({goal_mgr.iterations} 轮)。")
                     goal_mgr.clear()
@@ -277,10 +280,12 @@ def main() -> None:
                 esc_detector = EscDetector()
                 esc_detector.start()
                 try:
-                    _run_turn(
+                    tr = _run_turn(
                         plan_mgr.build_execution_prompt(), history, provider, ui,
                         memory_mgr, str(workspace.root), esc_detector.event, thinking_history
                     )
+                    if tr:
+                        input_mgr.update_ctx_usage(tr.prompt_tokens, config.usable_context)
                 except EscInterrupt:
                     ui.warning("\n⚠ 执行中断 (ESC)。")
                 except KeyboardInterrupt:
@@ -306,10 +311,12 @@ def main() -> None:
                     f"请根据意见修订方案，输出修改后的完整方案。"
                 )
                 try:
-                    _run_turn(
+                    tr = _run_turn(
                         revision_prompt, history, provider, ui,
                         memory_mgr, str(workspace.root), esc_detector.event, thinking_history
                     )
+                    if tr:
+                        input_mgr.update_ctx_usage(tr.prompt_tokens, config.usable_context)
                 except (EscInterrupt, KeyboardInterrupt):
                     plan_mgr.reject()
                     ui.warning("\n方案修订中断。")
@@ -357,6 +364,10 @@ def main() -> None:
             # /resume 可能替换了 history 和 session_meta
             if ctx._resume_result is not None:
                 history, session_meta = ctx._resume_result
+                from agent.context import TokenEstimator
+                _est = TokenEstimator()
+                _est_tokens = _est.estimate_messages(history.get_messages_for_api())
+                input_mgr.update_ctx_usage(_est_tokens, config.usable_context)
 
             # /goal 设置目标
             if ctx._goal_set is not None:
@@ -378,11 +389,13 @@ def main() -> None:
                     "memory_read", "todo_read",
                 }
                 try:
-                    _run_turn(
+                    tr = _run_turn(
                         plan_mgr.build_planning_prompt(), history, provider, ui,
                         memory_mgr, str(workspace.root), esc_detector.event, thinking_history,
                         allowed_tools=plan_read_tools,
                     )
+                    if tr:
+                        input_mgr.update_ctx_usage(tr.prompt_tokens, config.usable_context)
                 except EscInterrupt:
                     plan_mgr.reject()
                     ui.warning("\n⚠ 规划中断。")
@@ -411,8 +424,10 @@ def main() -> None:
         esc_detector = EscDetector()
         esc_detector.start()
         try:
-            _run_turn(user_input, history, provider, ui, memory_mgr, str(workspace.root),
-                      esc_detector.event, thinking_history)
+            turn_result = _run_turn(user_input, history, provider, ui, memory_mgr, str(workspace.root),
+                                    esc_detector.event, thinking_history)
+            if turn_result:
+                input_mgr.update_ctx_usage(turn_result.prompt_tokens, config.usable_context)
         except EscInterrupt:
             prefill = user_input
             ui.warning("\n⚠ Interrupted (ESC). Edit and re-send.")
@@ -462,10 +477,10 @@ def _run_turn_with_result(user_input: str, history, provider, ui, memory_mgr=Non
 def _run_turn(user_input: str, history, provider, ui, memory_mgr=None,
               workspace_root=None, interrupt_event=None,
               thinking_log: list[str] | None = None,
-              allowed_tools: set[str] | None = None) -> None:
-    _run_turn_with_result(user_input, history, provider, ui, memory_mgr,
-                          workspace_root, interrupt_event, thinking_log,
-                          allowed_tools)
+              allowed_tools: set[str] | None = None):
+    return _run_turn_with_result(user_input, history, provider, ui, memory_mgr,
+                                 workspace_root, interrupt_event, thinking_log,
+                                 allowed_tools)
 
 
 def _save_session(session_mgr, history, meta: dict) -> None:

@@ -20,11 +20,14 @@ from agent.ui import UI
 
 
 class LoopResult:
-    __slots__ = ("reason", "iterations")
+    __slots__ = ("reason", "iterations", "prompt_tokens", "completion_tokens")
 
-    def __init__(self, reason: str, iterations: int):
+    def __init__(self, reason: str, iterations: int,
+                 prompt_tokens: int = 0, completion_tokens: int = 0):
         self.reason = reason
         self.iterations = iterations
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
 
 
 SUBAGENT_TOOLS = {"read_file", "glob", "grep", "bash"}
@@ -91,6 +94,8 @@ def run_loop(
     tools_schema = get_tools_schema(allowed_tools)
     ctx = context_mgr or ContextManager(provider, memory_mgr=memory_mgr)
     iteration = 0
+    last_ctx_tokens = 0
+    turn_output_tokens = 0
 
     while iteration < max_iter:
         iteration += 1
@@ -161,6 +166,10 @@ def run_loop(
             estimated = ctx.estimator.estimate_messages(messages)
             ctx.estimator.calibrate(estimated, acc.usage["prompt_tokens"])
 
+        if acc.usage:
+            last_ctx_tokens = acc.usage.get("prompt_tokens", 0)
+            turn_output_tokens += acc.usage.get("completion_tokens", 0)
+
         # Append assistant message to history
         assistant_msg = acc.to_message()
         history.append(assistant_msg)
@@ -191,7 +200,7 @@ def run_loop(
             if not was_streamed:
                 ui.show_response(acc.content or "")
             ui.show_thinking_summary()
-            return LoopResult("natural_stop", iteration)
+            return LoopResult("natural_stop", iteration, last_ctx_tokens, turn_output_tokens)
 
         # Process tool calls → 中间思考
         if acc.has_tool_calls:
@@ -212,7 +221,7 @@ def run_loop(
                 history.seal_pending_tool_calls()
 
     ui.show_thinking_summary()
-    return LoopResult("max_iterations", iteration)
+    return LoopResult("max_iterations", iteration, last_ctx_tokens, turn_output_tokens)
 
 
 def _looks_like_missed_tool_call(content: str) -> bool:
