@@ -1,49 +1,56 @@
-"""启动 Banner：方正像素块拼出 MEGUMIN 艺术字 + 橙红色主题。"""
+"""启动 Banner：Rich Panel + 渐变 MEGUMIN 艺术字。"""
 
 from __future__ import annotations
 
-# 方正外轮廓：每个字母等高等宽(5x5格)，用 █ 和空格构成
-# 整体外形是规整的矩形块
-LOGO_RAW = r"""
-█   █ █████ █████ █   █ █   █ █ █   █
-██ ██ █     █     █   █ ██ ██ █ ██  █
-█ █ █ ████  █ ███ █   █ █ █ █ █ █ █ █
-█   █ █     █   █ █   █ █   █ █ █  ██
-█   █ █████ █████ █████ █   █ █ █   █
-"""
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
-# 橙红渐变行色
-_ROW_COLORS = [208, 196, 160, 196, 208]
+from agent.theme import MEGUMIN_THEME, ACCENT, ACCENT_DIM, MUTED
+
+LOGO_LINES = [
+    "█   █ █████ █████ █   █ █   █ █ █   █",
+    "██ ██ █     █     █   █ ██ ██ █ ██  █",
+    "█ █ █ ████  █ ███ █   █ █ █ █ █ █ █ █",
+    "█   █ █     █   █ █   █ █   █ █ █  ██",
+    "█   █ █████ █████ █████ █   █ █ █   █",
+]
+
+ROW_COLORS = ["#ff8700", "#ff5f00", "#d75f00", "#ff5f00", "#ff8700"]
 
 TAGLINE = "⚡ Explosion-class Coding Agent"
 
 
-def _colored(text: str, fg: int) -> str:
-    return f"\033[38;5;{fg}m{text}\033[0m"
-
-
 def render_banner(model: str = "", workspace: str = "") -> str:
-    """渲染启动 banner。"""
-    lines = [l for l in LOGO_RAW.split("\n") if l.strip()]
-    colored_lines = []
+    """渲染启动 banner，返回字符串。"""
+    console = Console(theme=MEGUMIN_THEME, force_terminal=True)
 
-    for i, line in enumerate(lines):
-        color = _ROW_COLORS[i % len(_ROW_COLORS)]
-        colored_lines.append("    " + _colored(line, color))
+    logo = Text()
+    for i, line in enumerate(LOGO_LINES):
+        logo.append(line, style=f"bold {ROW_COLORS[i]}")
+        if i < len(LOGO_LINES) - 1:
+            logo.append("\n")
 
-    colored_lines.append("")
-    colored_lines.append(_colored(f"    {TAGLINE}", 245))
+    body = Text()
+    body.append(logo)
+    body.append(f"\n\n{TAGLINE}", style=f"italic {MUTED}")
 
     if model or workspace:
-        info_parts = []
+        parts = []
         if model:
-            info_parts.append(f"model: {model}")
+            parts.append(f"model: {model}")
         if workspace:
-            info_parts.append(f"workspace: {workspace}")
-        info_line = "    " + " │ ".join(info_parts)
-        colored_lines.append(_colored(info_line, 240))
+            parts.append(f"workspace: {workspace}")
+        body.append(f"\n{' │ '.join(parts)}", style=MUTED)
 
-    colored_lines.append(_colored("    Type your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.", 240))
-    colored_lines.append("")
+    body.append(f"\nType your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.", style=MUTED)
 
-    return "\n".join(colored_lines)
+    panel = Panel(
+        body,
+        border_style=ACCENT_DIM,
+        padding=(1, 2),
+    )
+
+    with console.capture() as capture:
+        console.print(panel)
+    return capture.get().rstrip("\n")

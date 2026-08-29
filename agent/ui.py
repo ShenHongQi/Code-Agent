@@ -1,4 +1,10 @@
-"""ANSI 流式渲染：终端 UI + 脱敏过滤 + 动态状态指示器 + Markdown 渲染。"""
+"""终端 UI：基于 Rich 的流式渲染、工具展示、状态指示。
+
+设计参考：
+- OpenCode 的彩色左边框角色标识
+- Rich Panel/Syntax/Markdown 组件
+- 流式输出保持自定义增量渲染器（性能优先）
+"""
 
 from __future__ import annotations
 import os
@@ -6,23 +12,26 @@ import sys
 import shutil
 import threading
 import time
+from typing import Any
+
+from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.syntax import Syntax
+from rich.text import Text
 
 from agent.markdown import StreamingMarkdownRenderer, render_markdown
-
-# ANSI codes
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-ORANGE = "\033[38;5;196m"
-RED_ORANGE = "\033[38;5;160m"
-YELLOW = "\033[33m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-
-# 动态指示器帧
-SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+from agent.theme import (
+    MEGUMIN_THEME, ACCENT, ACCENT_DIM, ACCENT_BRIGHT,
+    MUTED, SUCCESS, ERROR, WARNING, INFO,
+    RESET, BOLD, DIM, ORANGE,
+)
 
 THINKING_MAX_LINES = 3
+
+# ─── 流式输出用的轻量 ANSI 常量 ─────────────────────────────────────
+_STREAM_HEADER = f"\n{BOLD}\033[38;5;208m◆ Assistant{RESET}\n"
 
 
 def _build_redact_patterns() -> list[str]:
@@ -33,79 +42,19 @@ def _build_redact_patterns() -> list[str]:
     return patterns
 
 
-class _StatusSpinner:
-    """在 Assistant 行显示动态旋转指示器。"""
-
-    def __init__(self):
-        self._thread: threading.Thread | None = None
-        self._running = False
-        self._stop_event = threading.Event()
-        self._label = ""
-        self._state = ""
-        self._lock = threading.Lock()
-        self._start_time = 0.0
-
-    def start(self, label: str = "Assistant", state: str = "thinking") -> None:
-        self._label = label
-        self._state = state
-        self._start_time = time.time()
-
-        if self._thread and self._thread.is_alive():
-            return
-
-        self._stop_event.clear()
-        self._running = True
-        self._thread = threading.Thread(target=self._animate, daemon=True)
-        self._thread.start()
-
-    def update_state(self, state: str) -> None:
-        self._state = state
-        self._start_time = time.time()
-
-    def stop(self) -> None:
-        if not self._running:
-            return
-        self._running = False
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=1)
-            self._thread = None
-        self._clear_line()
-
-    def _animate(self) -> None:
-        idx = 0
-        while not self._stop_event.is_set():
-            elapsed = time.time() - self._start_time
-            frame = SPIN_FRAMES[idx % len(SPIN_FRAMES)]
-
-            state_text = ""
-            if self._state == "thinking":
-                state_text = f" {DIM}({elapsed:.1f}s){RESET}"
-            elif self._state == "tool":
-                state_text = f" {DIM}(running tool...){RESET}"
-
-            line = f"\r{BOLD}{ORANGE}{frame} {self._label}{RESET}{state_text}  "
-
-            with self._lock:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-
-            idx += 1
-            time.sleep(0.08)
-
-    def _clear_line(self) -> None:
-        with self._lock:
-            cols = shutil.get_terminal_size().columns
-            sys.stdout.write("\r" + " " * cols + "\r")
-            sys.stdout.flush()
-
-
 class UI:
     def __init__(self, stream: bool = True):
         self._stream = stream
         self._redact_patterns = _build_redact_patterns()
-        self._status = _StatusSpinner()
         self._thinking_total_lines = 0
+        self._console = Console(theme=MEGUMIN_THEME, highlight=False)
+        self._streaming_active = False
+        self._md_renderer: StreamingMarkdownRenderer | None = None
+        self._status_active = False
+        self._status_thread: threading.Thread | None = None
+        self._status_stop = threading.Event()
+        self._status_label = ""
+        self._status_start_time = 0.0
 
     def _sanitize(self, text: str) -> str:
         for pattern in self._redact_patterns:
@@ -113,17 +62,54 @@ class UI:
                 text = text.replace(pattern, "[REDACTED]")
         return text
 
+    # ─── Spinner 状态指示 ─────────────────────────────────────────────
+
+    def _start_spinner(self, label: str = "thinking") -> None:
+        if self._status_thread and self._status_thread.is_alive():
+            self._status_label = label
+            self._status_start_time = time.time()
+            return
+        self._status_label = label
+        self._status_start_time = time.time()
+        self._status_stop.clear()
+        self._status_active = True
+        self._status_thread = threading.Thread(target=self._spin_loop, daemon=True)
+        self._status_thread.start()
+
+    def _stop_spinner(self) -> None:
+        if not self._status_active:
+            return
+        self._status_active = False
+        self._status_stop.set()
+        if self._status_thread:
+            self._status_thread.join(timeout=1)
+            self._status_thread = None
+        cols = shutil.get_terminal_size().columns
+        sys.stdout.write("\r" + " " * cols + "\r")
+        sys.stdout.flush()
+
+    def _spin_loop(self) -> None:
+        frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+        idx = 0
+        while not self._status_stop.is_set():
+            elapsed = time.time() - self._status_start_time
+            frame = frames[idx % len(frames)]
+            label = self._status_label
+            line = f"\r\033[38;5;208m{frame}\033[0m \033[2m{label} ({elapsed:.1f}s)\033[0m   "
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.08)
+
     # ─── 思考阶段 ─────────────────────────────────────────────────────
 
     def assistant_start(self) -> None:
-        """模型开始响应：显示动态旋转指示器。"""
         self._streaming_active = False
         self._md_renderer = None
-        self._status.start("Assistant", "thinking")
+        self._start_spinner("thinking")
 
     def assistant_end(self) -> None:
-        """模型响应结束：停止指示器。"""
-        self._status.stop()
+        self._stop_spinner()
         if self._streaming_active and self._md_renderer:
             tail = self._md_renderer.flush()
             if tail:
@@ -133,12 +119,11 @@ class UI:
             self._streaming_active = False
 
     def stream_token(self, token: str) -> None:
-        """流式输出一个 token（实时 Markdown 渲染）。"""
         if not self._stream:
             return
         if not self._streaming_active:
-            self._status.stop()
-            sys.stdout.write(f"\n{BOLD}{ORANGE}● Assistant{RESET}\n")
+            self._stop_spinner()
+            sys.stdout.write(_STREAM_HEADER)
             sys.stdout.flush()
             self._md_renderer = StreamingMarkdownRenderer()
             self._streaming_active = True
@@ -148,96 +133,89 @@ class UI:
             sys.stdout.flush()
 
     def show_thinking(self, content: str, max_lines: int = THINKING_MAX_LINES) -> None:
-        """显示中间思考内容：DIM 淡化 + 截断。"""
         if not content or not content.strip():
             return
-
         content = self._sanitize(content)
         lines = content.strip().split("\n")
         total = len(lines)
         self._thinking_total_lines += total
 
-        # 截取前 max_lines 行
-        display_lines = lines[:max_lines]
-
-        sys.stdout.write(f"{DIM}💭 ")
-        for i, line in enumerate(display_lines):
-            # 截断过长行
-            truncated = line[:100] + ("..." if len(line) > 100 else "")
-            if i == 0:
-                sys.stdout.write(f"{truncated}\n")
-            else:
-                sys.stdout.write(f"   {truncated}\n")
-
+        display = lines[:max_lines]
+        text = Text()
+        text.append("💭 ", style="dim")
+        for i, line in enumerate(display):
+            truncated = line[:120] + ("…" if len(line) > 120 else "")
+            if i > 0:
+                text.append("\n   ")
+            text.append(truncated, style="thinking")
         if total > max_lines:
-            hidden = total - max_lines
-            sys.stdout.write(f"   ... (省略 {hidden} 行)\n")
-
-        sys.stdout.write(RESET)
-        sys.stdout.flush()
+            text.append(f"\n   … (省略 {total - max_lines} 行)", style="dim")
+        self._console.print(text)
 
     def show_response(self, content: str) -> None:
-        """显示最终回答：完整 Markdown 渲染，突出显示。"""
         if not content or not content.strip():
             return
-
         content = self._sanitize(content)
-        sys.stdout.write(f"\n{BOLD}{ORANGE}● Assistant{RESET}\n")
+        # 用 Rich Panel + 橙色左边框（参考 OpenCode 风格）
         rendered = render_markdown(content)
-        sys.stdout.write(rendered + "\n")
-        sys.stdout.flush()
+        panel = Panel(
+            rendered,
+            title="[bold]◆ Assistant[/bold]",
+            title_align="left",
+            border_style=ACCENT,
+            padding=(0, 1),
+        )
+        self._console.print()
+        self._console.print(panel)
 
     def show_thinking_summary(self) -> None:
-        """轮次结束后显示思考统计提示。"""
         if self._thinking_total_lines > THINKING_MAX_LINES:
-            sys.stdout.write(
-                f"\n{DIM}(中间思考共 {self._thinking_total_lines} 行, "
-                f"/think 查看完整内容){RESET}\n"
+            self._console.print(
+                f"[muted](中间思考共 {self._thinking_total_lines} 行, "
+                f"/think 查看完整内容)[/muted]"
             )
-            sys.stdout.flush()
         self._thinking_total_lines = 0
 
     def show_full_thinking(self, thinking_log: list[str]) -> None:
-        """展开显示完整中间思考（/think 命令触发）。"""
         if not thinking_log:
-            sys.stdout.write(f"{DIM}(无中间思考记录){RESET}\n")
-            sys.stdout.flush()
+            self._console.print("[muted](无中间思考记录)[/muted]")
             return
-
-        sys.stdout.write(f"\n{DIM}{'─' * 40}\n")
-        sys.stdout.write(f"📝 完整中间思考 ({len(thinking_log)} 段)\n")
-        sys.stdout.write(f"{'─' * 40}{RESET}\n\n")
-
+        self._console.print()
+        self._console.print(Rule("📝 完整中间思考", style="muted"))
         for i, block in enumerate(thinking_log, 1):
-            sys.stdout.write(f"{DIM}[{i}] {block.strip()}{RESET}\n\n")
-
-        sys.stdout.write(f"{DIM}{'─' * 40}{RESET}\n")
-        sys.stdout.flush()
+            self._console.print(f"[muted]\\[{i}] {escape(block.strip())}[/muted]\n")
+        self._console.print(Rule(style="muted"))
 
     # ─── 工具调用 ─────────────────────────────────────────────────────
 
     def tool_start(self, name: str, args_summary: str) -> None:
-        self._status.stop()
+        self._stop_spinner()
         args_summary = self._sanitize(args_summary)
-        sys.stdout.write(f"\n  {DIM}⏺ {name}({args_summary}){RESET}\n")
-        sys.stdout.flush()
+        text = Text()
+        text.append("  ⏺ ", style=ACCENT_DIM)
+        text.append(name, style=f"bold {ACCENT_DIM}")
+        if args_summary:
+            display_args = args_summary[:80] + ("…" if len(args_summary) > 80 else "")
+            text.append(f"  {display_args}", style=MUTED)
+        self._console.print(text)
 
     def tool_result(self, ok: bool, summary: str) -> None:
-        self._status.stop()
-        color = GREEN if ok else RED
+        self._stop_spinner()
         icon = "⎿" if ok else "✗"
+        style = SUCCESS if ok else ERROR
         first_line = self._sanitize(summary.split("\n")[0][:120])
-        sys.stdout.write(f"    {color}{icon} {first_line}{RESET}\n")
-        sys.stdout.flush()
-        self._status.start("Assistant", "thinking")
+        text = Text()
+        text.append(f"    {icon} ", style=style)
+        text.append(first_line, style=style if not ok else "default")
+        self._console.print(text)
+        self._start_spinner("thinking")
 
     # ─── 会话重放 ─────────────────────────────────────────────────────
 
     def replay_history(self, messages: list[dict]) -> None:
-        """DIM 样式重放历史消息到终端。"""
-        sys.stdout.write(f"\n{DIM}{'─' * 50}\n")
-        sys.stdout.write(f"  ⏪ 恢复会话历史\n")
-        sys.stdout.write(f"{'─' * 50}{RESET}\n\n")
+        self._console.print()
+        self._console.print(Rule("⏪ 恢复会话历史", style=ACCENT_DIM))
+        self._console.print()
 
         for msg in messages:
             role = msg.get("role")
@@ -246,47 +224,39 @@ class UI:
             if role == "system":
                 continue
             elif role == "user":
-                # 截断到第一行
                 first_line = content.split("\n")[0][:80]
-                sys.stdout.write(f"{DIM}{ORANGE}> {first_line}{RESET}\n")
+                self._console.print(f"  [accent]>[/accent] [muted]{escape(first_line)}[/muted]")
             elif role == "assistant":
                 if content:
                     lines = content.strip().split("\n")
                     preview = lines[0][:100]
-                    sys.stdout.write(f"{DIM}● {preview}")
-                    if len(lines) > 1:
-                        sys.stdout.write(f" (+{len(lines) - 1} lines)")
-                    sys.stdout.write(f"{RESET}\n")
-                # 显示工具调用
-                tool_calls = msg.get("tool_calls", [])
-                for tc in tool_calls:
-                    func = tc.get("function", {})
-                    name = func.get("name", "?")
-                    sys.stdout.write(f"{DIM}  ⏺ {name}(...){RESET}\n")
+                    extra = f" (+{len(lines) - 1} lines)" if len(lines) > 1 else ""
+                    self._console.print(f"  [muted]◆ {escape(preview)}{extra}[/muted]")
+                for tc in msg.get("tool_calls", []):
+                    name = tc.get("function", {}).get("name", "?")
+                    self._console.print(f"    [muted]⏺ {name}(…)[/muted]")
             elif role == "tool":
-                continue  # 不显示工具结果详情
+                continue
 
-        sys.stdout.write(f"\n{DIM}{'─' * 50}\n")
-        sys.stdout.write(f"  ✅ 已恢复 ({len(messages)} 条消息)\n")
-        sys.stdout.write(f"{'─' * 50}{RESET}\n\n")
-        sys.stdout.flush()
+        self._console.print()
+        self._console.print(
+            f"  [success]✅ 已恢复 ({len(messages)} 条消息)[/success]"
+        )
+        self._console.print(Rule(style=ACCENT_DIM))
+        self._console.print()
 
     # ─── 通用消息 ─────────────────────────────────────────────────────
 
     def error(self, msg: str) -> None:
-        self._status.stop()
-        sys.stdout.write(f"\n{RED}Error: {msg}{RESET}\n")
-        sys.stdout.flush()
+        self._stop_spinner()
+        self._console.print(f"\n[error]Error: {escape(msg)}[/error]")
 
     def info(self, msg: str) -> None:
-        sys.stdout.write(f"{DIM}{msg}{RESET}\n")
-        sys.stdout.flush()
+        self._console.print(f"[muted]{escape(msg)}[/muted]")
 
     def warning(self, msg: str) -> None:
-        self._status.stop()
-        sys.stdout.write(f"{YELLOW}{msg}{RESET}\n")
-        sys.stdout.flush()
+        self._stop_spinner()
+        self._console.print(f"[warning]{escape(msg)}[/warning]")
 
     def iteration_info(self, iteration: int, max_iter: int) -> None:
-        sys.stdout.write(f"{DIM}[iteration {iteration}/{max_iter}]{RESET} ")
-        sys.stdout.flush()
+        self._console.print(f"[muted]\\[iteration {iteration}/{max_iter}][/muted]", end=" ")
