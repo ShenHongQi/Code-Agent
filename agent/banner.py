@@ -9,8 +9,6 @@ from rich.text import Text
 
 from agent.theme import MEGUMIN_THEME, PRIMARY, TEXT_MUTED, BORDER
 
-MAX_BANNER_WIDTH = 80
-
 LOGO_LINES = [
     "█   █ █████ █████ █   █ █   █ █ █   █",
     "██ ██ █     █     █   █ ██ ██ █ ██  █",
@@ -48,12 +46,10 @@ def render_banner(model: str = "", workspace: str = "") -> str:
 
     body.append(f"\nType your request, or 'exit' / Ctrl+D to quit. ESC to interrupt.", style=TEXT_MUTED)
 
-    cols = shutil.get_terminal_size().columns
     panel = Panel(
         body,
         border_style=BORDER,
         padding=(1, 2),
-        width=min(cols, MAX_BANNER_WIDTH),
     )
 
     with console.capture() as capture:

@@ -2,9 +2,39 @@
 
 from __future__ import annotations
 import argparse
+import os
+import signal
 import sys
 
 from agent.config import config
+
+# ─── 终端 resize 全局状态 ───
+_resize_pending = False
+_banner_params: dict = {}
+
+
+def _install_resize_handler(model: str, workspace: str) -> None:
+    global _banner_params
+    _banner_params = {"model": model, "workspace": workspace}
+    if hasattr(signal, "SIGWINCH"):
+        signal.signal(signal.SIGWINCH, _on_sigwinch)
+
+
+def _on_sigwinch(signum, frame):
+    global _resize_pending
+    _resize_pending = True
+
+
+def _flush_resize() -> None:
+    """若有待处理的 resize，清屏并重绘 banner。在每次等待输入前调用。"""
+    global _resize_pending
+    if not _resize_pending:
+        return
+    _resize_pending = False
+    from agent.banner import render_banner
+    sys.stdout.write("\033[2J\033[H")  # 清屏 + 光标归位
+    sys.stdout.flush()
+    print(render_banner(**_banner_params))
 
 
 def parse_args() -> argparse.Namespace:
@@ -193,6 +223,9 @@ def main() -> None:
     from agent.banner import render_banner
     print(render_banner(model=config.model, workspace=str(workspace.root)))
 
+    # SIGWINCH：窗口变化时清屏重绘
+    _install_resize_handler(model=config.model, workspace=str(workspace.root))
+
     # 默认新建会话（不做恢复提示）
     history = History(system_prompt)
     session_meta = _new_session_meta(str(workspace.root))
@@ -245,6 +278,7 @@ def main() -> None:
 
         # ── 方案模式等待确认 ──
         if plan_mgr.phase == "awaiting_approval":
+            _flush_resize()
             try:
                 user_input = input_mgr.styled_input(
                     prefill="", model=f"{config.model} [方案确认]"
@@ -307,6 +341,7 @@ def main() -> None:
                 continue
 
         # ── 正常交互模式 ──
+        _flush_resize()
         try:
             user_input = input_mgr.styled_input(prefill=prefill, model=config.model)
             prefill = ""

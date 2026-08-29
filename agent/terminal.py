@@ -19,8 +19,6 @@ ORANGE = "\033[38;5;216m"       # #ffaf87 ≈ Primary #fab283
 RED_ORANGE = "\033[38;5;180m"   # #d7af87 ≈ Primary dimmed
 YELLOW = "\033[33m"
 
-MAX_UI_WIDTH = 90
-
 
 class EscInterrupt(Exception):
     """ESC 键触发的中断。"""
@@ -86,7 +84,7 @@ class InputManager:
 
     def styled_input(self, prefill: str = "", model: str = "") -> str:
         """显示上下分隔线框住的输入区域。检测 / 开头触发命令补全。"""
-        width = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
+        width = shutil.get_terminal_size().columns
         sep = f"{ORANGE}{'─' * width}{RESET}"
 
         # 画框架
@@ -259,7 +257,7 @@ class InputManager:
             return "ESC"
 
         def _render():
-            cols = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
+            cols = shutil.get_terminal_size().columns
 
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {buffer}{RESET}")
@@ -305,7 +303,7 @@ class InputManager:
             sys.stdout.flush()
 
         def _finish(result: str):
-            cols = min(shutil.get_terminal_size().columns, MAX_UI_WIDTH)
+            cols = shutil.get_terminal_size().columns
             sys.stdout.write(f"\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
             sys.stdout.write(f"\033[J")
@@ -317,9 +315,26 @@ class InputManager:
 
         try:
             tty.setcbreak(fd)
+            last_cols = shutil.get_terminal_size().columns
             _render()
 
             while True:
+                # 用 select 超时检测：即使没有按键也能响应 resize
+                import select as _sel
+                try:
+                    ready, _, _ = _sel.select([fd], [], [], 0.3)
+                except (OSError, ValueError):
+                    ready = []
+
+                # 检查 resize（无论是否有按键）
+                cur_cols = shutil.get_terminal_size().columns
+                if cur_cols != last_cols:
+                    last_cols = cur_cols
+                    _render()
+
+                if not ready:
+                    continue
+
                 key = _read_key()
                 if not key:
                     continue
