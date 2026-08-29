@@ -1,6 +1,7 @@
 """CLI 入口、参数解析、REPL 主循环。"""
 
 from __future__ import annotations
+
 import argparse
 import sys
 
@@ -92,8 +93,9 @@ def _first_run_setup() -> None:
 
 def _new_session_meta(workspace: str) -> dict:
     """创建新会话的 meta。"""
-    from agent.session import SessionManager
     from datetime import datetime, timezone
+
+    from agent.session import SessionManager
 
     return {
         "session_id": SessionManager.create_session_id(workspace),
@@ -131,19 +133,19 @@ def main() -> None:
             sys.exit(1)
 
     # Initialize subsystems
-    from agent.workspace import Workspace, FileRegistry
-    from agent.tools import fs, search, bash, todo, task  # noqa: F401
-    from agent.tools import memory as memory_tool  # noqa: F401
-    from agent.tools import diff, proc, web, control  # noqa: F401
-    from agent.llm import create_provider
-    from agent.history import History
-    from agent.prompts import build_system_prompt
-    from agent.memory import MemoryManager
-    from agent.session import SessionManager
-    from agent.ui import UI
-    from agent.terminal import InputManager, EscDetector, EscInterrupt
-    from agent.commands import CommandContext, dispatch as cmd_dispatch
+    from agent.commands import CommandContext
+    from agent.commands import dispatch as cmd_dispatch
     from agent.goal import GoalManager, PlanManager
+    from agent.history import History
+    from agent.llm import create_provider
+    from agent.memory import MemoryManager
+    from agent.prompts import build_system_prompt
+    from agent.session import SessionManager
+    from agent.terminal import EscDetector, EscInterrupt, InputManager
+    from agent.tools import bash, control, diff, fs, proc, search, task, todo, web  # noqa: F401  # noqa: F401
+    from agent.tools import memory as memory_tool  # noqa: F401
+    from agent.ui import UI
+    from agent.workspace import FileRegistry, Workspace
 
     workspace = Workspace(config.workspace)
     registry = FileRegistry()
@@ -434,7 +436,7 @@ def _run_turn_with_result(user_input: str, history, provider, ui, memory_mgr=Non
                           allowed_tools: set[str] | None = None):
     """执行一轮对话并返回 LoopResult。"""
     from agent.history import make_user
-    from agent.loop import run_loop, LoopResult
+    from agent.loop import run_loop
 
     history.append(make_user(user_input))
 

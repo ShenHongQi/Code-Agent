@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from agent.tools import tool, ToolResult
-from agent.workspace import Workspace
 from agent.llm import Provider
+from agent.tools import ToolResult, tool
+from agent.workspace import Workspace
 
 _workspace: Workspace | None = None
 _provider: Provider | None = None
@@ -48,7 +48,7 @@ def task(description: str, tools: str = "read_only") -> ToolResult:
         return ToolResult(False, f"Error: Maximum sub-agents per turn reached ({SUBAGENT_PER_TURN}).")
 
     if tools not in TOOL_TIERS:
-        return ToolResult(False, f"Error: Invalid tools tier. Use: read_only, write, or full.")
+        return ToolResult(False, "Error: Invalid tools tier. Use: read_only, write, or full.")
 
     # 确定可用工具集
     allowed = TOOL_TIERS[tools]

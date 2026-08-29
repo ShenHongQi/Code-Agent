@@ -5,12 +5,12 @@
 """
 
 from __future__ import annotations
+
 import os
 import signal
 import subprocess
 import threading
 from dataclasses import dataclass
-
 
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 600

@@ -1,6 +1,7 @@
 """自动目标模式：设定目标后 agent 自主迭代直到完成。"""
 
 from __future__ import annotations
+
 from typing import Any
 
 
@@ -159,7 +160,7 @@ class PlanManager:
     def build_execution_prompt(self) -> str:
         """构建执行阶段的 prompt。"""
         return (
-            f"用户已批准上述方案。现在按照方案逐步执行实现。\n"
-            f"严格按照方案中列出的步骤操作，如遇到方案中未覆盖的情况，"
-            f"选择最合理的方式处理并在完成后说明。"
+            "用户已批准上述方案。现在按照方案逐步执行实现。\n"
+            "严格按照方案中列出的步骤操作，如遇到方案中未覆盖的情况，"
+            "选择最合理的方式处理并在完成后说明。"
         )

@@ -1,11 +1,11 @@
 """Token 估算校准 + 锚定式 compaction + 安全切点 + 孤儿自愈。"""
 
 from __future__ import annotations
+
 import json
 from typing import Any
 
 from agent.config import config
-
 
 SAFETY_FACTOR = 1.15
 EMA_ALPHA = 0.3  # exponential moving average for calibration
@@ -270,8 +270,8 @@ class ContextManager:
                 summary_prompt += f"[{role}]: {content[:500]}\n"
 
         try:
-            from agent.llm import stream_with_retry
             from agent.history import make_system, make_user
+            from agent.llm import stream_with_retry
             summary_messages = [
                 make_system("You are a concise summarizer. Output only the summary."),
                 make_user(summary_prompt[:8000]),

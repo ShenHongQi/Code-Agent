@@ -4,13 +4,14 @@
 """
 
 from __future__ import annotations
+
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import Any, Iterator
 
 from agent.config import config
-from agent.llm import Provider, LLMError, _classify_error
+from agent.llm import LLMError, Provider, _classify_error
 
 
 class RawProvider(Provider):

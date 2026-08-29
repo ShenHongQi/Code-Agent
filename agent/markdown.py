@@ -7,6 +7,7 @@
 """
 
 from __future__ import annotations
+
 import re
 import shutil
 import unicodedata
@@ -14,14 +15,19 @@ import unicodedata
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
 
 from agent.theme import (
+    ANSI_ACCENT,
+    ANSI_MUTED,
+    ANSI_PRIMARY,
+    ANSI_SECONDARY,
+    BOLD,
+    DIM,
+    ITALIC,
     MEGUMIN_THEME,
-    PRIMARY, SECONDARY, ACCENT, TEXT_MUTED,
-    MD_HEADING, MD_LINK, MD_CODE, MD_BLOCKQUOTE, MD_LIST, MD_STRONG,
-    RESET, BOLD, DIM, ITALIC,
-    ANSI_PRIMARY, ANSI_SECONDARY, ANSI_ACCENT, ANSI_MUTED,
+    PRIMARY,
+    RESET,
+    TEXT_MUTED,
 )
 
 # 轻量 ANSI（仅流式渲染用，避免每 token 构造 Rich 对象）

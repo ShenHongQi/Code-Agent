@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from agent.tools import tool, ToolResult
+from agent.permission import PermissionDenied, check_permission
+from agent.shell import MAX_TIMEOUT, ShellRunner
+from agent.tools import ToolResult, tool
 from agent.workspace import Workspace
-from agent.permission import check_permission, PermissionDenied
-from agent.shell import ShellRunner, MAX_TIMEOUT
 
 _runner: ShellRunner | None = None
 

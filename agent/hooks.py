@@ -1,6 +1,7 @@
 """事件钩子系统：允许插件和内部模块扩展 agent 行为。"""
 
 from __future__ import annotations
+
 from enum import Enum
 from typing import Any, Callable
 

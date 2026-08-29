@@ -1,12 +1,12 @@
 """会话持久化：保存/恢复/清理。"""
 
 from __future__ import annotations
+
 import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
 
 SESSIONS_DIR = Path.home() / ".megumin" / "sessions"
 MAX_SESSIONS = 20

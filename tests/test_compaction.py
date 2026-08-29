@@ -1,12 +1,13 @@
 """强制压缩集成测试：验证 --context-limit 32000 场景下 compaction 正确工作。"""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 
-from agent.context import ContextManager, TokenEstimator, find_safe_cut_point, heal_orphans
-from agent.history import History, make_user, make_assistant, make_tool
+from agent.context import ContextManager, TokenEstimator, heal_orphans
+from agent.history import History, make_assistant, make_tool, make_user
 
 
 def _build_long_history() -> History:
@@ -34,7 +35,7 @@ def test_compaction_preserves_invariants():
     # Force a low context limit
     os.environ["AGENT_CONTEXT_LIMIT"] = "32000"
     from agent.config import Config
-    cfg = Config()
+    Config()
 
     class MockCM(ContextManager):
         def __init__(self):

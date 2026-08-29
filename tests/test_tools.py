@@ -1,13 +1,13 @@
 """工具系统测试：schema 生成、参数校验、dispatch。"""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 
-from agent.tools import get_tools_schema, validate_params, dispatch, _REGISTRY
-from agent.tools import fs, search, bash, todo
-from agent.workspace import Workspace, FileRegistry
+from agent.tools import bash, dispatch, fs, get_tools_schema, search, todo, validate_params  # noqa: F401
+from agent.workspace import FileRegistry, Workspace
 
 
 def setup():

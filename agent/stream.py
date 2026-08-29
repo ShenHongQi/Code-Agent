@@ -1,6 +1,7 @@
 """流式 delta 重组：将 SSE chunk 累积为完整的 assistant 消息。"""
 
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from typing import Any

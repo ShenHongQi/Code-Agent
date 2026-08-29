@@ -1,18 +1,21 @@
 """Agent loop：自适应迭代、并行工具执行、卡死反思。"""
 
 from __future__ import annotations
+
 import concurrent.futures
+import random
 import sys
 import threading
+import time
 from typing import Any
 
 from agent.config import config
 from agent.context import ContextManager
-from agent.history import History, make_user, make_tool
-from agent.llm import Provider, stream_with_retry, LLMError, ContextLengthExceeded
+from agent.history import History, make_tool, make_user
+from agent.llm import ContextLengthExceeded, LLMError, Provider
 from agent.stream import StreamAccumulator
 from agent.terminal import EscInterrupt
-from agent.tools import get_tools_schema, dispatch, ToolResult
+from agent.tools import ToolResult, dispatch, get_tools_schema
 from agent.ui import UI
 
 
@@ -240,9 +243,6 @@ def _detect_stuck(history: History) -> bool:
                 break
     return recent_errors >= STUCK_WINDOW
 
-
-import random
-import time
 
 MAX_LLM_RETRIES = 5
 

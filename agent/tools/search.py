@@ -1,10 +1,11 @@
 """搜索工具：glob / grep。"""
 
 from __future__ import annotations
+
 import re
 from pathlib import Path
 
-from agent.tools import tool, ToolResult
+from agent.tools import ToolResult, tool
 from agent.workspace import Workspace, WorkspaceError
 
 _workspace: Workspace | None = None

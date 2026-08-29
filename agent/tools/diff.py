@@ -1,11 +1,12 @@
 """批量编辑与差异查看工具。"""
 
 from __future__ import annotations
+
 import json
 import subprocess
 
-from agent.tools import tool, ToolResult
-from agent.workspace import Workspace, FileRegistry, WorkspaceError
+from agent.tools import ToolResult, tool
+from agent.workspace import FileRegistry, Workspace, WorkspaceError
 
 _workspace: Workspace | None = None
 _registry: FileRegistry | None = None

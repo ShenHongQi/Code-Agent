@@ -1,10 +1,11 @@
 """终端交互：readline 历史、Spinner 动画、ESC 检测、命令补全、resize 处理。"""
 
 from __future__ import annotations
+
 import os
+import shutil
 import signal
 import sys
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -232,7 +233,7 @@ class InputManager:
             )
 
         try:
-            sys.stdout.write(f"\r\033[K")
+            sys.stdout.write("\r\033[K")
             sys.stdout.flush()
             result = input(f"{BOLD}{ORANGE}> {RESET}")
         finally:
@@ -247,9 +248,9 @@ class InputManager:
         使用 os.read(fd) 做无缓冲读取，避免 Python 层缓冲导致
         select() 误判 escape sequence 为裸 ESC。
         """
+        import fcntl
         import termios
         import tty
-        import fcntl
 
         if not sys.stdin.isatty() or os.name == "nt":
             return input(f"{BOLD}{ORANGE}> {RESET}{initial}")
@@ -330,9 +331,9 @@ class InputManager:
         def _render():
             cols = shutil.get_terminal_size().columns
 
-            sys.stdout.write(f"\r\033[K")
+            sys.stdout.write("\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {buffer}{RESET}")
-            sys.stdout.write(f"\033[J")
+            sys.stdout.write("\033[J")
 
             lines_below = 0
             sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
@@ -375,13 +376,13 @@ class InputManager:
 
         def _finish(result: str):
             cols = shutil.get_terminal_size().columns
-            sys.stdout.write(f"\r\033[K")
+            sys.stdout.write("\r\033[K")
             sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
-            sys.stdout.write(f"\033[J")
+            sys.stdout.write("\033[J")
             sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
             if model:
                 sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
-            sys.stdout.write(f"\n")
+            sys.stdout.write("\n")
             sys.stdout.flush()
 
         try:

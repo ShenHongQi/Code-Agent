@@ -1,6 +1,7 @@
 """后台进程管理：启动、查看状态、终止。"""
 
 from __future__ import annotations
+
 import atexit
 import os
 import signal
@@ -10,9 +11,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from agent.tools import tool, ToolResult
+from agent.permission import PermissionDenied, check_permission
+from agent.tools import ToolResult, tool
 from agent.workspace import Workspace
-from agent.permission import check_permission, PermissionDenied
 
 _workspace: Workspace | None = None
 _processes: dict[str, "BackgroundProc"] = {}

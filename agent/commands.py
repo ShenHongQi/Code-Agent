@@ -1,6 +1,7 @@
 """斜杠命令分发系统：注册 + 派发 /command。"""
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -146,7 +147,7 @@ def _cmd_resume(ctx: CommandContext, args: str) -> None:
 
 def _cmd_skill(ctx: CommandContext, args: str) -> None:
     """列出或执行 skill。"""
-    from agent.skills import get_all_skills, get_skill, execute_skill, SKILLS_DIR
+    from agent.skills import SKILLS_DIR, execute_skill, get_all_skills, get_skill
 
     # /skill 或 /skill list → 列出所有 skill
     if not args or args.strip() == "list":
@@ -156,9 +157,9 @@ def _cmd_skill(ctx: CommandContext, args: str) -> None:
             alias_str = f" ({', '.join(s.aliases)})" if s.aliases else ""
             auto_str = " ⚡" if s.auto_approve else ""
             ctx.ui.info(f"  {s.name:<12}{s.description}{alias_str}{auto_str}")
-        ctx.ui.info(f"\n  用法: /skill <name> [参数]")
-        ctx.ui.info(f"  ⚡ = 自动审批（无需确认权限）")
-        ctx.ui.info(f"  安装: /skill install <url>")
+        ctx.ui.info("\n  用法: /skill <name> [参数]")
+        ctx.ui.info("  ⚡ = 自动审批（无需确认权限）")
+        ctx.ui.info("  安装: /skill install <url>")
         ctx.ui.info(f"  自定义: {SKILLS_DIR}/*.md")
         return
 
@@ -247,7 +248,7 @@ def _install_skill(ctx: CommandContext, url: str) -> None:
         ctx.ui.warning("请提供完整的 URL（以 http:// 或 https:// 开头）")
         return
 
-    ctx.ui.info(f"正在下载 skill …")
+    ctx.ui.info("正在下载 skill …")
 
     skill, message = install_skill(url)
     if skill:
@@ -263,7 +264,6 @@ def _cmd_goal(ctx: CommandContext, args: str) -> None:
     """设定自动目标，agent 自主迭代完成。"""
     if not args:
         # 显示当前目标状态
-        from agent.goal import GoalManager
         ctx.ui.info("用法: /goal <目标描述>  — 设定目标并自动执行")
         ctx.ui.info("      /goal clear       — 清除当前目标")
         return
@@ -275,8 +275,8 @@ def _cmd_goal(ctx: CommandContext, args: str) -> None:
 
     ctx._goal_set = args.strip()
     ctx.ui.info(f"🎯 目标已设定: {args.strip()}")
-    ctx.ui.info(f"   进入自动模式，agent 将自主工作直到完成。")
-    ctx.ui.info(f"   按 ESC 可中断，/goal clear 取消目标。")
+    ctx.ui.info("   进入自动模式，agent 将自主工作直到完成。")
+    ctx.ui.info("   按 ESC 可中断，/goal clear 取消目标。")
 
 
 def _cmd_plan(ctx: CommandContext, args: str) -> None:
@@ -288,13 +288,15 @@ def _cmd_plan(ctx: CommandContext, args: str) -> None:
 
     ctx._plan_request = args.strip()
     ctx.ui.info(f"📋 进入方案设计模式: {args.strip()}")
-    ctx.ui.info(f"   agent 将分析代码并输出实现方案，等待你的确认。")
+    ctx.ui.info("   agent 将分析代码并输出实现方案，等待你的确认。")
 
 
 def _cmd_permissions(ctx: CommandContext, args: str) -> None:
     """查看或切换权限模式。"""
     from agent.permission import (
-        PermissionMode, get_permission_mode, set_permission_mode,
+        PermissionMode,
+        get_permission_mode,
+        set_permission_mode,
     )
 
     current = get_permission_mode()

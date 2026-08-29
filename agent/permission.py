@@ -1,6 +1,7 @@
 """权限系统：三层分类 + 风险等级 + 权限模式 + 递归解包。"""
 
 from __future__ import annotations
+
 import re
 import sys
 from dataclasses import dataclass

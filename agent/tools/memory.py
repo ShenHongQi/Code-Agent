@@ -1,8 +1,9 @@
 """记忆管理工具：跨会话持久化知识。"""
 
 from __future__ import annotations
-from agent.tools import tool, ToolResult
+
 from agent.memory import MemoryManager
+from agent.tools import ToolResult, tool
 
 _memory_mgr: MemoryManager | None = None
 

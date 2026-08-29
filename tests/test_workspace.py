@@ -1,12 +1,13 @@
 """工作区安全测试：路径收敛、敏感文件拦截。"""
 
-import sys
 import os
+import sys
 import tempfile
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 
-from agent.workspace import Workspace, WorkspaceError, FileRegistry
+from agent.workspace import FileRegistry, Workspace, WorkspaceError
 
 
 def test_path_convergence():

@@ -1,7 +1,8 @@
 """上下文管理测试：token 估算、安全切点、孤儿自愈。"""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 

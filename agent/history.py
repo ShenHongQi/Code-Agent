@@ -1,6 +1,7 @@
 """消息构造与会话状态管理。"""
 
 from __future__ import annotations
+
 from typing import Any
 
 

@@ -1,6 +1,7 @@
 """@tool registry、schema 生成、参数校验、dispatch。"""
 
 from __future__ import annotations
+
 import inspect
 import json
 from typing import Any, Callable, get_type_hints

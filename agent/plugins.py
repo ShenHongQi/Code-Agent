@@ -1,13 +1,13 @@
 """插件系统：自动发现和加载外部工具扩展。"""
 
 from __future__ import annotations
+
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent.tools import tool, _REGISTRY
+from agent.tools import _REGISTRY, tool
 from agent.workspace import Workspace
-
 
 GLOBAL_PLUGINS_DIR = Path.home() / ".megumin" / "plugins"
 

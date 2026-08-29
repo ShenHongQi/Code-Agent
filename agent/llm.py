@@ -1,6 +1,7 @@
 """Provider 抽象；重试与错误分类。"""
 
 from __future__ import annotations
+
 import random
 import time
 from typing import Any, Iterator

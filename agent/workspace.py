@@ -1,8 +1,8 @@
 """路径收敛 + FileRegistry 文件新鲜度追踪。"""
 
 from __future__ import annotations
+
 import hashlib
-import os
 from pathlib import Path
 
 from agent.config import config
@@ -70,7 +70,7 @@ class FileRegistry:
         """返回 None 表示新鲜；返回错误描述表示文件已被外部修改。"""
         key = str(path)
         if key not in self._records:
-            return f"File not yet read. Use read_file first."
+            return "File not yet read. Use read_file first."
         record = self._records[key]
         try:
             stat = path.stat()

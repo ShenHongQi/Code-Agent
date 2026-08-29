@@ -1,13 +1,14 @@
 """文件系统工具：read_file / write_file / edit_file。"""
 
 from __future__ import annotations
+
 import os
 import tempfile
 from pathlib import Path
 
-from agent.tools import tool, ToolResult
-from agent.workspace import Workspace, FileRegistry, WorkspaceError
-from agent.permission import check_tool_permission, PermissionDenied
+from agent.permission import PermissionDenied, check_tool_permission
+from agent.tools import ToolResult, tool
+from agent.workspace import FileRegistry, Workspace, WorkspaceError
 
 _workspace: Workspace | None = None
 _registry: FileRegistry | None = None

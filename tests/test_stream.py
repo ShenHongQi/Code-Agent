@@ -1,7 +1,8 @@
 """流式解析测试：delta 重组、tool_call 碎片化。"""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 

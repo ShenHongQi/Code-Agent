@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.tools import tool, ToolResult
+from agent.tools import ToolResult, tool
 
 _todos: list[dict[str, str]] = []
 

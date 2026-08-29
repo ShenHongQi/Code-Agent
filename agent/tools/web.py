@@ -1,12 +1,13 @@
 """网页抓取工具：文档查阅、错误搜索。"""
 
 from __future__ import annotations
-import re
-import urllib.request
-import urllib.error
 
-from agent.tools import tool, ToolResult
-from agent.permission import check_tool_permission, PermissionDenied
+import re
+import urllib.error
+import urllib.request
+
+from agent.permission import PermissionDenied, check_tool_permission
+from agent.tools import ToolResult, tool
 
 MAX_CONTENT = 16 * 1024  # 16KB text limit
 

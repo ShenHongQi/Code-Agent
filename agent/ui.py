@@ -4,27 +4,29 @@
 """
 
 from __future__ import annotations
+
 import os
-import sys
 import shutil
+import sys
 import threading
 import time
-from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
-from rich.panel import Panel
 from rich.rule import Rule
-from rich.syntax import Syntax
 from rich.text import Text
 
 from agent.markdown import StreamingMarkdownRenderer, render_markdown
 from agent.theme import (
+    ANSI_PRIMARY,
+    BOLD,
+    DIM,
+    ERROR,
     MEGUMIN_THEME,
-    PRIMARY, SECONDARY, ACCENT, TEXT_MUTED, BORDER, BORDER_DIM,
-    SUCCESS, ERROR, WARNING, INFO,
-    RESET, BOLD, DIM,
-    ANSI_PRIMARY, ANSI_MUTED,
+    PRIMARY,
+    RESET,
+    SUCCESS,
+    TEXT_MUTED,
 )
 
 THINKING_MAX_LINES = 3
@@ -267,7 +269,6 @@ class UI:
 
     def replay_history(self, messages: list[dict], model: str = "") -> None:
         """重放历史消息，完全还原对话时的视觉效果。"""
-        import json
 
         if not model:
             from agent.config import config as _cfg
@@ -338,6 +339,7 @@ class UI:
 
     def _replay_tool_calls(self, tool_calls: list[dict], tool_results: dict[str, str]) -> None:
         import json
+
         from agent.loop import _summarize_args
 
         for tc in tool_calls:

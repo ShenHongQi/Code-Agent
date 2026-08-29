@@ -1,13 +1,16 @@
 """权限分级测试。"""
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("AGENT_API_KEY", "test")
 
 from agent.permission import (
-    classify_command, classify_tool_call, unwrap_command,
-    RiskLevel, PermissionMode, Classification,
+    RiskLevel,
+    classify_command,
+    classify_tool_call,
+    unwrap_command,
 )
 
 

@@ -1,9 +1,8 @@
 """跨会话记忆管理：全局记忆 + 项目记忆。"""
 
 from __future__ import annotations
-import os
-from pathlib import Path
 
+from pathlib import Path
 
 GLOBAL_MEMORY_DIR = Path.home() / ".megumin" / "memory"
 GLOBAL_MEMORY_FILE = GLOBAL_MEMORY_DIR / "global.md"
@@ -53,7 +52,7 @@ class MemoryManager:
             return False
 
         lines = target.read_text(encoding="utf-8").splitlines()
-        filtered = [l for l in lines if keyword.lower() not in l.lower()]
+        filtered = [line for line in lines if keyword.lower() not in line.lower()]
 
         if len(filtered) == len(lines):
             return False
@@ -93,8 +92,8 @@ class MemoryManager:
             lines = new_content.splitlines()
             while len("\n".join(lines)) > max_size and len(lines) > 5:
                 # 移除最早的非标题行
-                for i, l in enumerate(lines):
-                    if not l.startswith("#") and l.strip():
+                for i, line in enumerate(lines):
+                    if not line.startswith("#") and line.strip():
                         lines.pop(i)
                         break
                 else:
