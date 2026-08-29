@@ -316,10 +316,41 @@ def _resolve_raw_url(url: str) -> str:
     return url
 
 
+def _detect_skill_format(content: str, url: str) -> str:
+    """检测 skill 文件格式 → native / claude-code / aas / cursorrules / unknown。"""
+    has_frontmatter = content.lstrip().startswith("---")
+
+    if not has_frontmatter:
+        if ".cursorrules" in url or ".mdc" in url or "cursorrules" in url.lower():
+            return "cursorrules"
+        return "unknown"
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return "unknown"
+
+    meta = _parse_simple_yaml(parts[1])
+
+    if "allowed-tools" in meta or ("description" in meta and "name" not in meta):
+        return "claude-code"
+
+    aas_keys = ("risk", "source", "source_repo", "date_added", "source_type")
+    if "name" in meta and any(k in meta for k in aas_keys):
+        return "aas"
+
+    return "native"
+
+
+def _name_from_url(url: str) -> str:
+    """从 URL 提取 skill 名称。"""
+    stem = Path(url.rstrip("/").split("/")[-1]).stem
+    name = re.sub(r"[^a-z0-9_-]", "", stem.lower().replace(".", "-"))
+    return name or "imported"
+
+
 def _convert_cursorrules(text: str, source_url: str) -> str:
-    """将 .cursorrules 纯文本转换为 megumin skill .md 格式。"""
-    name = Path(source_url.rstrip("/").split("/")[-1]).stem
-    name = re.sub(r"[^a-z0-9_-]", "", name.lower().replace(".", "-")) or "imported"
+    """将 .cursorrules / .mdc 纯文本转换为 Megumin 格式。"""
+    name = _name_from_url(source_url)
     return (
         f"---\n"
         f"name: {name}\n"
@@ -332,14 +363,63 @@ def _convert_cursorrules(text: str, source_url: str) -> str:
     )
 
 
+def _convert_claude_code(content: str, url: str) -> str:
+    """将 Claude Code .claude/commands/*.md 转换为 Megumin 格式。"""
+    parts = content.split("---", 2)
+    meta = _parse_simple_yaml(parts[1]) if len(parts) >= 3 else {}
+    body = parts[2].strip() if len(parts) >= 3 else content
+
+    name = _name_from_url(url)
+    description = meta.get("description", f"从 Claude Code 导入: {name}")
+
+    body = body.replace("$ARGUMENTS", "{args}")
+
+    return (
+        f"---\n"
+        f"name: {name}\n"
+        f"description: {description}\n"
+        f"aliases: []\n"
+        f"auto_approve: false\n"
+        f"---\n\n"
+        f"{body}\n"
+    )
+
+
+def _convert_aas(content: str, url: str) -> str:
+    """将 AAS SKILL.md 转换为 Megumin 格式。"""
+    parts = content.split("---", 2)
+    meta = _parse_simple_yaml(parts[1]) if len(parts) >= 3 else {}
+    body = parts[2].strip() if len(parts) >= 3 else content
+
+    name = meta.get("name") or _name_from_url(url)
+    description = meta.get("description", "")
+    if len(description) > 120:
+        description = description[:117] + "..."
+
+    if "{args}" not in body:
+        body += "\n\n用户需求: {args}\n"
+
+    return (
+        f"---\n"
+        f"name: {name}\n"
+        f"description: {description}\n"
+        f"aliases: []\n"
+        f"auto_approve: false\n"
+        f"---\n\n"
+        f"{body}\n"
+    )
+
+
 def install_skill(url: str) -> tuple[Skill | None, str]:
     """从 URL 下载并安装 skill 到用户目录。
 
     返回 (skill, message)。skill 为 None 表示失败。
     支持:
-      - GitHub 文件链接 (自动转 raw)
-      - GitHub Gist 链接
-      - 任意 .md / .yaml / .cursorrules 直链
+      - Megumin 原生格式 (.md with name/description/prompt)
+      - Claude Code 格式 (.claude/commands/*.md, $ARGUMENTS)
+      - AAS 格式 (skills/xxx/SKILL.md, Agent Skills 标准)
+      - .cursorrules / .mdc (纯文本自动转换)
+      - GitHub 文件链接 / Gist / raw URL
     """
     raw_url = _resolve_raw_url(url)
 
@@ -357,18 +437,24 @@ def install_skill(url: str) -> tuple[Skill | None, str]:
     if not content.strip():
         return None, "下载的文件内容为空"
 
-    # 检测格式并解析
-    is_md = content.lstrip().startswith("---")
-    is_cursorrules = ".cursorrules" in url or "cursorrules" in url.lower()
+    fmt = _detect_skill_format(content, url)
+    fmt_label = ""
 
-    if is_cursorrules and not is_md:
+    if fmt == "cursorrules":
         content = _convert_cursorrules(content, url)
-        is_md = True
+        fmt_label = " (cursorrules → megumin)"
+    elif fmt == "claude-code":
+        content = _convert_claude_code(content, url)
+        fmt_label = " (Claude Code → megumin)"
+    elif fmt == "aas":
+        content = _convert_aas(content, url)
+        fmt_label = " (AAS → megumin)"
 
     USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
+    is_md = content.lstrip().startswith("---")
+
     if is_md:
-        # 先写临时文件再解析
         tmp = USER_SKILLS_DIR / "_installing.md"
         tmp.write_text(content, encoding="utf-8")
         skill = _parse_skill_md(tmp)
@@ -379,7 +465,6 @@ def install_skill(url: str) -> tuple[Skill | None, str]:
         tmp.rename(dest)
         skill.source = str(dest)
     else:
-        # 尝试当作 YAML 解析
         tmp = USER_SKILLS_DIR / "_installing.yaml"
         tmp.write_text(content, encoding="utf-8")
         skill = _parse_skill_yaml(tmp)
@@ -391,7 +476,7 @@ def install_skill(url: str) -> tuple[Skill | None, str]:
         skill.source = str(dest)
 
     register_skill(skill)
-    return skill, f"已安装 skill '{skill.name}' → {dest}"
+    return skill, f"已安装 skill '{skill.name}' → {dest}{fmt_label}"
 
 
 # ─── 模块初始化 ────────────────────────────────────────────────────────────
