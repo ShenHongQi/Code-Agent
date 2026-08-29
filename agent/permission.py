@@ -151,6 +151,10 @@ def check_permission(command: str, auto_approve: bool = False) -> None:
     if level == "confirm":
         if auto_approve:
             return
+        # Skill 运行时自动审批
+        from agent.skills import is_auto_approve
+        if is_auto_approve():
+            return
         if _state.is_session_approved(command):
             return
         _ask_confirmation(command)

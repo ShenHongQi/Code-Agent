@@ -25,6 +25,30 @@ class EscInterrupt(Exception):
     pass
 
 
+def _visual_width(s: str) -> int:
+    """计算字符串在终端中的视觉宽度（CJK字符占2列）。"""
+    import unicodedata
+    w = 0
+    for ch in s:
+        if unicodedata.east_asian_width(ch) in ("W", "F"):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _truncate_to_width(s: str, max_width: int) -> str:
+    """截断字符串至不超过 max_width 列宽。"""
+    import unicodedata
+    w = 0
+    for i, ch in enumerate(s):
+        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if w + cw > max_width:
+            return s[:i]
+        w += cw
+    return s
+
+
 # ─── InputManager ───────────────────────────────────────────────────────────
 
 class InputManager:
@@ -75,42 +99,44 @@ class InputManager:
         sys.stdout.write(f"\033[{up}A\r")
         sys.stdout.flush()
 
-        # 如果有 prefill 且以 / 开头，或者需要检测首字符
+        # 如果有 prefill 且以 / 开头 — _slash_input 自行处理框架底部和光标
         if prefill and prefill.startswith("/") and self._commands:
-            result = self._slash_input(prefill)
-            down = 2 if model else 1
-            sys.stdout.write(f"\033[{down}B\r")
-            sys.stdout.flush()
-            return result
+            return self._slash_input(prefill, model)
 
         if prefill and self._readline_available:
             self._readline.set_startup_hook(lambda: self._readline.insert_text(prefill))
 
+        slash_used = False
         try:
-            # 尝试 peek 第一个字符来检测 /
             if not prefill and self._commands and sys.stdin.isatty() and os.name != "nt":
-                result = self._input_with_slash_detect(model)
+                result, slash_used = self._input_with_slash_detect(model)
             else:
                 result = input(f"{BOLD}{ORANGE}> {RESET}")
         finally:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        down = 2 if model else 1
-        sys.stdout.write(f"\033[{down}B\r")
-        sys.stdout.flush()
+        if not slash_used:
+            # 普通输入后，光标在输入行下一行（底线处），跳过剩余框架
+            down = 2 if model else 1
+            sys.stdout.write(f"\033[{down}B\r")
+            sys.stdout.flush()
 
         return result.strip()
 
-    def _input_with_slash_detect(self, model: str) -> str:
-        """读取第一个字符，如果是 / 则进入命令补全模式。"""
+    def _input_with_slash_detect(self, model: str) -> tuple[str, bool]:
+        """读取第一个字符，如果是 / 则进入命令补全模式。
+
+        返回 (result, slash_used):
+          slash_used=True 时，_slash_input 已自行处理光标和框架底部重绘。
+          slash_used=False 时，调用者需自行跳过框架底部。
+        """
         import termios
         import tty
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
 
-        # 显示提示符
         sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
         sys.stdout.flush()
 
@@ -124,17 +150,16 @@ class InputManager:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
         if first_char == "/":
-            return self._slash_input("/")
+            result = self._slash_input("/", model)
+            return (result, True)
 
-        # 非 / 开头：用 readline 继续，prefill 第一个字符
+        # 非 / 开头：用 readline 继续
         if self._readline_available:
             self._readline.set_startup_hook(
                 lambda: self._readline.insert_text(first_char)
             )
 
         try:
-            # 清除已输出的 "> " 和第一个字符的回显（raw mode 不会回显）
-            # 但我们需要重新绘制，因为 input() 会输出自己的 prompt
             sys.stdout.write(f"\r\033[K")
             sys.stdout.flush()
             result = input(f"{BOLD}{ORANGE}> {RESET}")
@@ -142,90 +167,97 @@ class InputManager:
             if self._readline_available:
                 self._readline.set_startup_hook()
 
-        return result
+        return (result, False)
 
-    def _slash_input(self, initial: str = "/") -> str:
-        """斜杠命令补全模式：实时下拉框 + 过滤。"""
+    def _slash_input(self, initial: str = "/", model: str = "") -> str:
+        """斜杠命令补全模式：实时下拉框 + 过滤。
+
+        在输入行下方绘制下拉框。每次重绘时先用 \\033[J 清除输入行下方所有内容，
+        然后重新绘制框架底部（分隔线+model）和下拉框，最后用相对移动回到输入行。
+        这种方式不依赖 \\033[s/u 光标保存，对终端滚动免疫。
+        """
         import termios
         import tty
 
         if not sys.stdin.isatty() or os.name == "nt":
-            # 回退：普通输入
             return input(f"{BOLD}{ORANGE}> {RESET}{initial}")
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
 
-        buffer = initial  # 包含 /
+        buffer = initial
         selected = 0
-        dropdown_lines = 0  # 当前下拉框占用行数
 
         def _get_matches():
-            query = buffer[1:].lower()  # 去掉 /
+            query = buffer[1:].lower()
             if not query:
                 return self._commands[:]
             return [(n, d) for n, d in self._commands if n.startswith(query)]
 
         def _render():
-            nonlocal dropdown_lines
             cols = shutil.get_terminal_size().columns
 
-            # 清除之前的下拉框
-            if dropdown_lines > 0:
-                # 移到下拉框第一行并清除
-                sys.stdout.write(f"\033[{dropdown_lines}B")
-                for _ in range(dropdown_lines):
-                    sys.stdout.write(f"\033[A\033[K")
-                sys.stdout.write(f"\033[A")  # 回到输入行
-
-            # 重绘输入行
+            # 1. 重绘输入行
             sys.stdout.write(f"\r\033[K")
-            sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
-            sys.stdout.write(f"{BOLD}{ORANGE}{buffer}{RESET}")
+            sys.stdout.write(f"{BOLD}{ORANGE}> {buffer}{RESET}")
 
-            # 绘制下拉框
+            # 2. 清除输入行下方所有内容
+            sys.stdout.write(f"\033[J")
+
+            # 3. 重新绘制框架底部
+            lines_below = 0
+            sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
+            lines_below += 1
+            if model:
+                sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
+                lines_below += 1
+
+            # 4. 绘制下拉框
             matches = _get_matches()
             if matches:
-                max_name = max(len(n) for n, _ in matches)
-                box_width = min(cols - 4, max_name + 30)
+                # box_inner: │和│之间的字符宽度
+                box_inner = min(cols - 8, 48)
+                # 条目可用宽度 = box_inner - 前缀3(" ❯ "或"   ") - 后缀1(" ")
+                entry_max = box_inner - 4
 
-                sys.stdout.write(f"\n")
-                sys.stdout.write(f"  {DIM}┌{'─' * box_width}┐{RESET}\n")
-
+                sys.stdout.write(f"\n  {DIM}┌{'─' * box_inner}┐{RESET}")
+                lines_below += 1
                 for i, (name, desc) in enumerate(matches):
-                    entry = f"/{name:<{max_name}}  {desc}"
-                    entry = entry[:box_width - 2]
-                    padding = " " * max(0, box_width - 2 - len(entry))
-
+                    raw_entry = f"/{name}  {desc}"
+                    entry = _truncate_to_width(raw_entry, entry_max)
+                    vw = _visual_width(entry)
+                    pad = " " * max(0, entry_max - vw)
                     if i == selected:
                         sys.stdout.write(
-                            f"  {DIM}│{RESET} {BOLD}{ORANGE}❯ {entry}{padding}{RESET} {DIM}│{RESET}\n"
+                            f"\n  {DIM}│{RESET}{BOLD}{ORANGE} ❯ {entry}{pad} {RESET}{DIM}│{RESET}"
                         )
                     else:
                         sys.stdout.write(
-                            f"  {DIM}│  {entry}{padding} │{RESET}\n"
+                            f"\n  {DIM}│{RESET}   {entry}{pad} {DIM}│{RESET}"
                         )
+                    lines_below += 1
+                sys.stdout.write(f"\n  {DIM}└{'─' * box_inner}┘{RESET}")
+                lines_below += 1
 
-                sys.stdout.write(f"  {DIM}└{'─' * box_width}┘{RESET}")
-
-                dropdown_lines = len(matches) + 2  # top border + items + bottom border
-
-                # 光标回到输入行
-                sys.stdout.write(f"\033[{dropdown_lines}A")
-                # 光标定位到输入内容末尾
-                sys.stdout.write(f"\r\033[{len(buffer) + 2}C")
-            else:
-                dropdown_lines = 0
-
+            # 5. 相对移动回输入行
+            if lines_below > 0:
+                sys.stdout.write(f"\033[{lines_below}A")
+            cursor_col = _visual_width(buffer) + 2
+            sys.stdout.write(f"\r\033[{cursor_col}C")
             sys.stdout.flush()
 
-        def _clear_dropdown():
-            if dropdown_lines > 0:
-                sys.stdout.write(f"\n")
-                for _ in range(dropdown_lines):
-                    sys.stdout.write(f"\033[K\n")
-                sys.stdout.write(f"\033[{dropdown_lines + 1}A")
-                sys.stdout.flush()
+        def _finish(result: str):
+            """退出时清理：清除下方内容，重绘框架底部，输出结果。"""
+            cols = shutil.get_terminal_size().columns
+            sys.stdout.write(f"\r\033[K")
+            sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
+            sys.stdout.write(f"\033[J")
+            # 重绘框架底部
+            sys.stdout.write(f"\n{ORANGE}{'─' * cols}{RESET}")
+            if model:
+                sys.stdout.write(f"\n{DIM}  model: {model}{RESET}")
+            sys.stdout.write(f"\n")
+            sys.stdout.flush()
 
         try:
             tty.setcbreak(fd)
@@ -235,7 +267,6 @@ class InputManager:
                 ch = sys.stdin.read(1)
 
                 if ch == "\x1b":
-                    # 转义序列
                     import select
                     r, _, _ = select.select([sys.stdin], [], [], 0.05)
                     if r:
@@ -249,48 +280,36 @@ class InputManager:
                             _render()
                     else:
                         # 裸 ESC — 取消
-                        _clear_dropdown()
-                        sys.stdout.write(f"\r\033[K")
-                        sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
-                        sys.stdout.flush()
+                        _finish("")
                         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                         return ""
 
-                elif ch in ("\r", "\n"):
+                elif ch in ("\r", "\n"):  # Enter
                     matches = _get_matches()
-                    _clear_dropdown()
                     if matches and selected < len(matches):
                         result = "/" + matches[selected][0]
                     else:
                         result = buffer
-                    # 显示最终选择
-                    sys.stdout.write(f"\r\033[K")
-                    sys.stdout.write(f"{BOLD}{ORANGE}> {result}{RESET}")
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
+                    _finish(result)
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                     return result
 
-                elif ch == "\x7f" or ch == "\x08":  # Backspace
+                elif ch in ("\x7f", "\x08"):  # Backspace
                     if len(buffer) > 1:
                         buffer = buffer[:-1]
                         selected = 0
                         _render()
-                    elif len(buffer) == 1:
-                        # 退到空，取消命令模式
-                        _clear_dropdown()
-                        sys.stdout.write(f"\r\033[K")
-                        sys.stdout.write(f"{BOLD}{ORANGE}> {RESET}")
-                        sys.stdout.flush()
+                    else:
+                        _finish("")
                         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                         return ""
 
                 elif ch == "\x03":  # Ctrl+C
-                    _clear_dropdown()
+                    _finish("")
                     termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                     raise KeyboardInterrupt()
 
-                elif ch == "\t":  # Tab — 自动填充选中项
+                elif ch == "\t":  # Tab 填充
                     matches = _get_matches()
                     if matches and selected < len(matches):
                         buffer = "/" + matches[selected][0]

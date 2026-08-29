@@ -240,6 +240,11 @@ def main() -> None:
             # /resume 可能替换了 history 和 session_meta
             if ctx._resume_result is not None:
                 history, session_meta = ctx._resume_result
+
+            # skill 执行计为一轮对话
+            if ctx._skill_executed:
+                session_meta["turns"] = session_meta.get("turns", 0) + 1
+                _save_session(session_mgr, history, session_meta)
             continue
 
         # 新一轮对话：清空思考记录
