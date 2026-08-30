@@ -27,12 +27,12 @@ megumin "写一个排序算法"   # 单次任务
 
 ## 技术特性
 
-- **语言**：Python 3.13，约 5300 行
-- **模型接入**：自研 Provider 抽象层，对接 OpenAI 兼容网关（默认 DeepSeek，可切 Kimi / Qwen / GLM / OpenAI）
+- **语言**：Python，约 6800 行
+- **模型接入**：自研 Provider 抽象层，对接 OpenAI 兼容网关（默认 DeepSeek V4 Pro，可切 Kimi / Qwen / GLM / OpenAI）
 - **双传输层**：SDK 实现 + 纯标准库 `urllib` + 手写 SSE 解析（`AGENT_TRANSPORT=raw` 切换）
 - **运行时依赖**：仅 `openai` 一个包
 - **交互系统**：斜杠命令 + 两级自动补全 + 会话恢复 + 跨会话记忆
-- **Skill 系统**：11 个内置 skill，支持自定义与远程安装
+- **Skill 系统**：11 个内置 skill，支持自定义与远程安装，模型可通过 `use_skill` 工具自动激活
 
 ## 核心模块
 
@@ -44,20 +44,21 @@ megumin "写一个排序算法"   # 单次任务
 | `agent/history.py` | 消息构造，会话状态，seal_pending_tool_calls |
 | `agent/tools/` | @tool 装饰器 registry，签名→schema，手写校验器 |
 | `agent/workspace.py` | 路径收敛，敏感文件拦截，FileRegistry 新鲜度 |
-| `agent/permission.py` | 三级危险分类（allow/confirm/block），skill 自动审批集成 |
+| `agent/permission.py` | 三级危险分类（allow/confirm/block），交互式箭头键菜单，skill 自动审批 |
 | `agent/shell.py` | ShellRunner（stdin=DEVNULL, 进程组 kill, 有界 drain） |
 | `agent/transport.py` | 纯 stdlib Provider 实现，证明 SDK 可替换 |
 | `agent/terminal.py` | 终端输入管理，斜杠命令两级自动补全，CJK 宽度适配 |
-| `agent/commands.py` | 斜杠命令分发系统（help/think/resume/skill） |
+| `agent/commands.py` | 斜杠命令分发系统（help/think/resume/skill/goal/plan） |
 | `agent/skills/` | Skill 引擎：注册/执行/自动审批，内置 + 用户自定义 + 远程安装 |
 | `agent/session.py` | 会话持久化与恢复 |
 | `agent/memory.py` | 跨会话记忆管理 |
 | `agent/markdown.py` | Markdown 终端渲染 |
 | `agent/banner.py` | 启动 banner 与状态显示 |
-| `agent/ui.py` | ANSI 流式渲染 |
+| `agent/ui.py` | ANSI 流式渲染，上下文用量常驻显示 |
 | `agent/prompts.py` | System prompt 与 subagent prompt 构建 |
+| `agent/goal.py` | 自动目标模式 + 方案设计模式 |
 
-## 工具集
+## 工具集（22 个）
 
 | 工具 | 功能 |
 |------|------|
@@ -82,6 +83,7 @@ megumin "写一个排序算法"   # 单次任务
 | `memory_read` | 读取跨会话记忆 |
 | `memory_forget` | 删除跨会话记忆 |
 | `extend_iterations` | 动态扩展迭代上限 |
+| `use_skill` | 激活 skill 工作流，启用自动审批 |
 
 ## 斜杠命令
 
@@ -93,10 +95,15 @@ megumin "写一个排序算法"   # 单次任务
 | `/think` | 展开上一轮完整中间思考 | `/thinking` |
 | `/resume` | 交互式恢复历史会话 | `/r` |
 | `/skill` | 管理和执行 skill | `/s` |
+| `/goal` | 自动目标模式，agent 自主迭代直到完成 | `/g` |
+| `/plan` | 方案设计模式，先规划再执行 | `/p` |
+| `/permissions` | 查看/切换权限模式 | `/perm` |
 
 ## Skill 系统
 
 Skill 是预定义的工作流模板，执行时自动审批工具调用，无需逐次确认。
+
+模型可通过 `use_skill` 工具自动识别并激活匹配的 skill——当用户请求匹配某个 skill 的触发条件时，模型主动调用 `use_skill`，UI 显示激活状态，后续工具调用自动审批。
 
 ### 内置 Skill
 
@@ -134,7 +141,7 @@ Skill 是预定义的工作流模板，执行时自动审批工具调用，无�
 - **GitHub 文件链接**：自动转换为 raw URL 下载
 - **GitHub Gist**：直接获取 gist 内容
 - **任意 URL**：直链 `.md` / `.yaml` 文件
-- **Cursorrules**：自动转换 `.cursorrules` 格式为 megumin skill
+- **多格式兼容**：自动识别并转换 Claude Code 格式、AAS（Agent Skills）格式、`.cursorrules` 格式
 
 自定义 skill 存放在 `~/.megumin/skills/`，支持 `.md`（YAML frontmatter）和 `.yaml` 两种格式。
 
@@ -161,17 +168,17 @@ python -m tests.test_tools
 
 ## 配置项
 
-通过环境变量或 `.env` 文件配置：
+通过环境变量、`.env` 文件或 `~/.megumin/config` 配置：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `AGENT_API_KEY` | (必填) | API Key |
-| `AGENT_BASE_URL` | `https://api.deepseek.com/v1` | API 端点 |
-| `AGENT_MODEL` | `deepseek-chat` | 模型名 |
+| `AGENT_BASE_URL` | `https://api.deepseek.com` | API 端点 |
+| `AGENT_MODEL` | `deepseek-v4-pro` | 模型名 |
 | `AGENT_TRANSPORT` | `sdk` | 传输层（`sdk` 或 `raw`） |
 | `AGENT_MAX_ITERATIONS` | `40` | 单轮最大迭代 |
 | `AGENT_WORKSPACE` | `cwd` | 工作区路径 |
-| `AGENT_CONTEXT_LIMIT` | `0`（用默认） | 强制上下文限制（测试用） |
+| `AGENT_CONTEXT_LIMIT` | `0`（用模型默认） | 强制上下文限制 |
 | `AGENT_NO_STREAM` | `false` | 禁用流式输出 |
 
 ## 设计文档

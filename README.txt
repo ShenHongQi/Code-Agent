@@ -10,7 +10,7 @@ https://github.com/ShenHongQi/Code-Agent
 核心是 run_loop 驱动的迭代循环：调用 LLM → 解析响应 → 执行工具 → 结果回填 → 再次调用。五类终止条件：自然完成（finish_reason=stop 且无 tool_calls）、迭代上限（自适应估算，简单任务 8 轮、复杂任务 25 轮）、上下文耗尽（compaction 后仍超限）、致命 LLM 错误（不可重试的 HTTP 状态码）、用户中断（KeyboardInterrupt/ESC）。额外机制：卡住检测（连续 3 轮 Error 时注入反思提示）、遗漏调用检测（正则匹配文本中描述命令却未调用工具，自动纠正）、agent 可通过 extend_iterations 工具自主延长迭代上限至 60 轮。
 
 二、工具系统（agent/tools/）
-自研 @tool 装饰器注册机制：从函数签名的类型标注和 docstring 自动生成符合 OpenAI function calling 规范的 JSON Schema，手写参数校验器（类型检查、必填校验、枚举约束）。dispatch 统一入口执行，兜底 try/except 确保任何异常都返回 ToolResult 而非崩溃循环。21 个工具涵盖：文件读写（带行号、mtime 新鲜度校验防覆盖外部修改）、精确编辑（唯一字符串匹配替换）、Shell 执行（stdin=DEVNULL 防挂死、进程组 kill、有界 drain）、正则搜索、后台进程管理、只读子代理、跨会话记忆、网页获取等。
+自研 @tool 装饰器注册机制：从函数签名的类型标注和 docstring 自动生成符合 OpenAI function calling 规范的 JSON Schema，手写参数校验器（类型检查、必填校验、枚举约束）。dispatch 统一入口执行，兜底 try/except 确保任何异常都返回 ToolResult 而非崩溃循环。22 个工具涵盖：文件读写（带行号、mtime 新鲜度校验防覆盖外部修改）、精确编辑（唯一字符串匹配替换）、Shell 执行（stdin=DEVNULL 防挂死、进程组 kill、有界 drain）、正则搜索、后台进程管理、只读子代理、跨会话记忆、网页获取等。
 
 三、上下文管理与 Token 估算（agent/context.py）
 手写 TokenEstimator，CJK 字符按 1.0 token/字、英文按 1/3.6 token/字符估算，通过 EMA（指数移动平均，α=0.3）用服务端实际 usage 持续校准。锚定式 Compaction：保留 system prompt + 首轮用户输入 + 最近 6 轮对话，中间部分由模型摘要压缩。安全切点算法确保不在 tool_call 与 tool response 之间截断；heal_orphans 修复压缩后的孤儿 tool_call（补占位响应）或孤儿 tool response（移除）。
