@@ -291,8 +291,8 @@ def set_spinner_control(pause_cb) -> None:
     _spinner_pause_cb = pause_cb
 
 
-def _interactive_confirm(description: str, detail: str,
-                         risk: RiskLevel, options: list[tuple[str, str]]) -> str:
+def interactive_confirm(description: str, detail: str,
+                        risk: RiskLevel, options: list[tuple[str, str]]) -> str:
     """Arrow-key interactive permission prompt. Returns the chosen option key."""
     import shutil
 
@@ -405,7 +405,7 @@ def _ask_confirmation(command: str, risk: RiskLevel, rationale: str) -> None:
         ("all", "本次会话允许同类"),
         ("deny", "拒绝"),
     ]
-    choice = _interactive_confirm(rationale, command, risk, options)
+    choice = interactive_confirm(rationale, command, risk, options)
     if choice == "once":
         return
     elif choice == "all":
@@ -425,7 +425,7 @@ def _ask_tool_confirmation(tool_name: str, args: dict,
         ("once", "允许"),
         ("deny", "拒绝"),
     ]
-    choice = _interactive_confirm(rationale, detail, risk, options)
+    choice = interactive_confirm(rationale, detail, risk, options)
     if choice == "once":
         return
     raise PermissionDenied("User denied.")

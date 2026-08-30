@@ -81,6 +81,9 @@ def run_loop(
     global _extend_requested
     _extend_requested = False
 
+    from agent.skills import set_auto_approve
+    set_auto_approve(False)
+
     # 自适应上限
     if max_iterations:
         max_iter = max_iterations

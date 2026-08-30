@@ -63,6 +63,7 @@ Do NOT output commands in markdown code blocks — CALL the tool.
 - task(description, tools) — delegate to sub-agent ("read_only"/"write"/"full")
 - todo_write(todos) — plan multi-step work
 - extend_iterations(reason) — request more steps for complex tasks
+- use_skill(name) — activate a skill workflow when user request matches its trigger
 
 ### Knowledge
 - memory_write(content, scope) — save to persistent memory
@@ -94,7 +95,8 @@ def build_system_prompt(workspace_root: str, memory_mgr: "MemoryManager | None" 
     if catalog:
         sections.append(
             "## Available Skills\n"
-            "当用户的请求匹配某个 skill 的触发条件时，主动采用该 skill 的完整工作流来执行任务。\n"
+            "当用户的请求匹配某个 skill 的触发条件时，**第一步先调用 use_skill(name=skill名) 工具激活该 skill**，"
+            "然后按照返回的工作流步骤执行任务。不要跳过 use_skill 调用直接执行。\n"
             "用户也可通过 `/skill <name> [参数]` 手动触发。\n\n"
             + catalog
         )

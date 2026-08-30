@@ -450,6 +450,16 @@ def install_skill(url: str) -> tuple[Skill | None, str]:
         content = _convert_aas(content, url)
         fmt_label = " (AAS → megumin)"
 
+    if "{args}" not in content and "$ARGUMENTS" not in content:
+        if content.rstrip().endswith("---"):
+            content += "\n\n用户需求: {args}\n"
+        else:
+            parts_c = content.split("---", 2)
+            if len(parts_c) >= 3:
+                content = f"---{parts_c[1]}---\n{parts_c[2].rstrip()}\n\n用户需求: {{args}}\n"
+            else:
+                content += "\n\n用户需求: {args}\n"
+
     USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
     is_md = content.lstrip().startswith("---")

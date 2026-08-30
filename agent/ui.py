@@ -56,6 +56,7 @@ TOOL_STATUS: dict[str, str] = {
     "todo_write": "planning",
     "proc_status": "checking",
     "proc_kill": "killing",
+    "use_skill": "⚡ activating skill",
 }
 
 

@@ -244,31 +244,44 @@ class InputManager:
 
         try:
             tty.setcbreak(fd)
-            first_byte = os.read(fd, 1)
-            if first_byte and first_byte[0] == 0x1B:
-                # Escape sequence (arrow key, etc.) — drain remaining bytes and ignore
-                import fcntl
-                flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-                try:
-                    os.read(fd, 8)
-                except (BlockingIOError, OSError):
+            import fcntl
+            # Drain stray bytes left from previous cbreak session
+            _fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, _fl | os.O_NONBLOCK)
+            try:
+                while os.read(fd, 64):
                     pass
-                finally:
-                    fcntl.fcntl(fd, fcntl.F_SETFL, flags)
-                first_char = ""
-            elif first_byte and first_byte[0] >= 0xC0:
-                # Multi-byte UTF-8 — read remaining continuation bytes
-                n = 1 if first_byte[0] < 0xE0 else (2 if first_byte[0] < 0xF0 else 3)
-                data = first_byte
-                for _ in range(n):
-                    extra = os.read(fd, 1)
-                    if not extra:
-                        break
-                    data += extra
-                first_char = data.decode("utf-8", errors="replace")
-            else:
-                first_char = first_byte.decode("utf-8", errors="replace") if first_byte else ""
+            except (BlockingIOError, OSError):
+                pass
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, _fl)
+
+            first_char = ""
+            while not first_char:
+                first_byte = os.read(fd, 1)
+                if not first_byte:
+                    break
+                if first_byte[0] == 0x1B:
+                    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                    try:
+                        os.read(fd, 8)
+                    except (BlockingIOError, OSError):
+                        pass
+                    finally:
+                        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+                elif first_byte[0] >= 0xC0:
+                    n = 1 if first_byte[0] < 0xE0 else (2 if first_byte[0] < 0xF0 else 3)
+                    data = first_byte
+                    for _ in range(n):
+                        extra = os.read(fd, 1)
+                        if not extra:
+                            break
+                        data += extra
+                    first_char = data.decode("utf-8", errors="replace")
+                elif first_byte[0] >= 0x20:
+                    first_char = first_byte.decode("utf-8", errors="replace")
+                # else: control char (CR/LF/etc) — skip and re-read
         except (termios.error, OSError, KeyboardInterrupt):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             raise EOFError()

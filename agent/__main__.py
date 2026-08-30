@@ -263,19 +263,14 @@ def main() -> None:
 
         # ── 方案模式等待确认 ──
         if plan_mgr.phase == "awaiting_approval":
-            try:
-                user_input = input_mgr.styled_input(
-                    prefill="", model=f"{config.model} [方案确认]"
-                )
-            except (EOFError, KeyboardInterrupt):
-                plan_mgr.reject()
-                print("\n方案已取消。")
-                continue
-
-            lower = user_input.strip().lower()
-            if lower in ("y", "yes", "确认", "ok", "执行", "批准", "approve"):
+            from agent.permission import interactive_confirm, RiskLevel
+            choice = interactive_confirm(
+                "方案已生成", "选择操作",
+                RiskLevel.MEDIUM,
+                [("approve", "执行方案"), ("revise", "提修改意见"), ("reject", "取消方案")],
+            )
+            if choice == "approve":
                 plan_mgr.approve()
-                ui.info("✅ 方案已批准，开始执行…")
                 thinking_history.clear()
                 esc_detector = EscDetector()
                 esc_detector.start()
@@ -297,12 +292,15 @@ def main() -> None:
                 session_meta["turns"] = session_meta.get("turns", 0) + 1
                 _save_session(session_mgr, history, session_meta)
                 continue
-            elif lower in ("n", "no", "取消", "cancel", "reject", "拒绝"):
-                plan_mgr.reject()
-                ui.info("❌ 方案已取消。")
-                continue
-            else:
-                # 用户提供修改意见，追加到对话让 agent 修订方案
+            elif choice == "revise":
+                try:
+                    user_input = input_mgr.styled_input(
+                        prefill="", model=f"{config.model} [修改意见]"
+                    )
+                except (EOFError, KeyboardInterrupt):
+                    plan_mgr.reject()
+                    print("\n方案已取消。")
+                    continue
                 thinking_history.clear()
                 esc_detector = EscDetector()
                 esc_detector.start()
@@ -322,10 +320,11 @@ def main() -> None:
                     ui.warning("\n方案修订中断。")
                 finally:
                     esc_detector.stop()
-                # 仍在等待确认
-                ui.info("\n📋 方案已修订。输入 y 执行 / n 取消 / 或继续提修改意见:")
                 session_meta["turns"] = session_meta.get("turns", 0) + 1
                 _save_session(session_mgr, history, session_meta)
+                continue
+            else:
+                plan_mgr.reject()
                 continue
 
         # ── 正常交互模式 ──
