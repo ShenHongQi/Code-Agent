@@ -263,7 +263,7 @@ def main() -> None:
 
         # ── 方案模式等待确认 ──
         if plan_mgr.phase == "awaiting_approval":
-            from agent.permission import interactive_confirm, RiskLevel
+            from agent.permission import RiskLevel, interactive_confirm
             choice = interactive_confirm(
                 "方案已生成", "选择操作",
                 RiskLevel.MEDIUM,
