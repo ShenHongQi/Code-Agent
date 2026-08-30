@@ -2,7 +2,7 @@
 
 > 本文是施工蓝图，也是答辩底稿。考核明确指出面试重点是"你是否理解你的 agent 为什么这样运转，是否能为你的设计决策给出辩护"，因此文中每个设计点都写成 **决策 / 被拒绝的替代方案 / 理由** 三段式。只写结论的文档在答辩时没有价值。
 
-技术选型：**Python 3.13**，约 5300 行；自研 provider 抽象层对接 OpenAI 兼容网关，默认 DeepSeek；运行时依赖只有一个 HTTP client。
+技术选型：**Python 3.13**，约 6900 行；自研 provider 抽象层对接 OpenAI 兼容网关，默认 DeepSeek V4 Pro（1M 上下文）；运行时依赖只有一个 HTTP client。
 
 ---
 
@@ -13,7 +13,7 @@
 | 题目要求的自研项 | 落地位置 | 自研内容概要 |
 |---|---|---|
 | 对话历史与上下文管理 | `agent/history.py`、`agent/context.py` | 消息构造、token 估算与校准、锚定式 compaction、安全切点、孤儿 tool_call 自愈 |
-| 工具的定义与本地执行 | `agent/tools/` | `@tool` 由 Python 类型签名生成 JSON Schema、手写参数校验器、dispatch、8 个工具的本地实现 |
+| 工具的定义与本地执行 | `agent/tools/` | `@tool` 由 Python 类型签名生成 JSON Schema、手写参数校验器、dispatch、23 个工具的本地实现 |
 | 模型输出的解析 | `agent/stream.py` | SSE delta 累积、tool_call 按 `index` 跨 chunk 重组、`finish_reason` 判定 |
 | 循环终止条件 | `agent/loop.py` | 5 类终止条件的显式判定；`seal_pending_tool_calls` 不变量 |
 | 错误处理 | `agent/llm.py`、`agent/tools/__init__.py` | 可重试/致命错误分类、full jitter 退避、工具异常转模型可见反馈 |
@@ -40,7 +40,8 @@ agent/
   ui.py           ANSI 流式渲染
   prompts.py      system prompt 与 subagent prompt
   terminal.py     终端输入管理、斜杠命令两级自动补全、CJK 宽度适配
-  commands.py     斜杠命令分发系统（help/think/resume/skill）
+  commands.py     斜杠命令分发系统（help/think/resume/skill/goal/plan）
+  goal.py         目标模式 GoalManager + 方案模式 PlanManager
   session.py      会话持久化、JSON 序列化/反序列化、按工作区索引
   memory.py       跨会话记忆管理（工作区记忆目录）
   banner.py       启动 banner 与环境状态显示
@@ -61,7 +62,7 @@ agent/
     web.py        web_fetch
     memory.py     memory_write / memory_read / memory_forget
     proc.py       spawn / proc_status / proc_kill（后台进程管理）
-    control.py    extend_iterations（动态扩展迭代上限）
+    control.py    extend_iterations（动态扩展迭代上限）+ use_skill（skill 激活）
 tests/
 .env.example
 requirements.txt
@@ -198,6 +199,7 @@ registry 从签名推出 `type`（`str`→string、`int`→integer、`bool`→bo
 | `memory_read` | 读取跨会话记忆 |
 | `memory_forget` | 删除跨会话记忆条目 |
 | `extend_iterations` | 动态扩展当前轮次的迭代上限 |
+| `use_skill` | 显式激活 skill 工作流（见 §12.7） |
 
 ### 4.5 `edit_file`：为什么是精确字符串替换
 
@@ -391,6 +393,18 @@ subprocess.Popen(cmd, shell=True,
 
 同时提供 `--no-stream` 回退，走**完全相同**的代码路径（同一个 accumulator，只是不渲染增量）——这样回退路径不会成为未测试的第二套逻辑。
 
+### 8.3 交互式确认（interactive_confirm）
+
+**决策**：将权限确认和方案确认统一为 `interactive_confirm()` 组件：方向键上下选择 + 回车确认，选定后整个下拉框折叠为一行结果，不留屏幕噪音。
+
+方案模式（§18）完成规划后弹出三选一：「✅ 执行方案 / ✏️ 提修改意见 / ❌ 取消方案」。权限门同样复用此组件。
+
+**技术细节**：进入 `tty.setcbreak()` 半原始模式，`os.read(fd, ...)` 逐字节读取方向键序列，渲染用相对 ANSI 移动（`\033[{n}A`）。与权限确认和终端输入共用同一套按键识别逻辑（`_read_key()`），避免重复实现。
+
+**被拒绝的替代方案**：文本输入（`y/n`、`输入 1/2/3`）。
+
+**理由**：文本输入需要用户理解提示、键入、回车——三步；方向键只需一步操作。更重要的是，交互风格必须统一：权限门用选择框、方案确认也用选择框，否则用户的操作心智模型会在不同场景间切换。
+
 ---
 
 ## 9. 错误处理与重试
@@ -409,7 +423,17 @@ subprocess.Popen(cmd, shell=True,
 
 **理由**：不是为了"看起来像自己写的"，而是**双层重试会乘算**——SDK 默认重试 2 次、我重试 5 次，最坏情况变成 10 次请求和不可预测的总等待时间，且 SDK 那层对我的日志和退避策略完全不可见。重试是需要统一治理的策略（它决定了成本上限和最长阻塞时间），必须只存在于一处。full jitter 而非固定退避，是因为限流通常是多个请求同时被拒，同步重试会再次撞在一起。
 
-### 9.2 模型侧错误的恢复
+### 9.2 Provider 兼容性：assistant 消息的 content 字段
+
+**问题**：DeepSeek V4 Pro 严格要求每条 assistant 消息都包含 `content` 字段，即使该消息只有 `tool_calls` 而无正文。OpenAI API 在此处宽松——`content` 缺失或为 `null` 均可——但 DeepSeek 直接返回 400：`"Invalid assistant message: content or tool_calls must be set"`。
+
+**决策**：`stream.py` 的 `to_message()` 和 `history.py` 的 `make_assistant()` **始终设置 `content: self.content or ""`**，保证即使内容为空也发送空字符串而非省略该字段。
+
+**被拒绝的替代方案**：在 `llm.py` 发送前遍历 history 补齐缺失字段。
+
+**理由**：在构造点就保证格式正确，比在发送点做后期修补可靠——后者依赖"每个构造路径都经过同一个修补点"，一旦某处直接构造 dict 就会漏过。这是典型的"正确性应在源头保证"原则。此修复同时兼容 OpenAI（空字符串对它也合法）和 DeepSeek，不需要 provider 特判。
+
+### 9.3 模型侧错误的恢复
 
 模型给出畸形 tool 参数（JSON 语法错误、缺必填字段、类型不符）**不崩、不重试整轮**，而是回一条 tool 消息，内容包含具体校验错误 + 期望的 schema，让模型自我纠正。这与 §4.3 是同一个原则的两个面：**工具层的错误是模型的输入，不是程序的异常。**
 
@@ -482,7 +506,20 @@ class Provider(Protocol):
 
 **决策**：`_visual_width(s)` 用 `unicodedata.east_asian_width()` 判定每个字符宽度（W/F = 2，其余 = 1）。所有下拉框渲染用 `_visual_width()` 计算填充量，`_truncate_to_width()` 做精确截断。
 
-### 11.4 下拉框渲染
+### 11.4 输入缓冲区净化
+
+**问题**：斜杠命令选中执行后，下一次输入的第一个字符被吞掉，且 `/` 无法再次触发命令下拉框。
+
+**根因**：`interactive_confirm()` 等组件使用 `tty.setcbreak()` + `os.read()` 读取按键，退出时恢复终端模式。但回车键的 release 和终端恢复之间存在竞态——残留字节（如回车的尾部、终端模式切换产生的噪声）留在 OS 缓冲区里。下一次 `_input_with_slash_detect()` 进入 cbreak 模式后的第一个 `os.read()` 读到的是这些残留，而非用户真正敲的字符。
+
+**修复（两层）**：
+
+1. **缓冲区排水**：进入 cbreak 后，用 `fcntl.F_SETFL | O_NONBLOCK` 将 fd 临时设为非阻塞，循环 `os.read(fd, 64)` 直到 `BlockingIOError`（缓冲区已空），再恢复阻塞模式。
+2. **控制字符过滤**：首字节读取循环中，ASCII `< 0x20` 的字节（CR/LF/NUL 等控制字符）直接跳过并重读，只有可打印字符才被接受为有效输入。
+
+**理由**：两层修复各自独立——排水覆盖"残留垃圾"，控制字符过滤覆盖"合法但无意义的字节"。任一层单独失效不影响另一层。
+
+### 11.5 下拉框渲染
 
 **决策**：每次 `_render()` 用 `\033[J`（清除光标以下）清空旧内容，重新绘制边框和选项，再用 `\033[{n}A` 回到输入行。
 
@@ -554,7 +591,46 @@ YAML frontmatter + Markdown body。`{args}` 和 `{workspace}` 是运行时替换
 
 **理由**：与 `transport.py`（§10 的 raw 回退）一致——标准库够用的场景不加依赖。
 
-### 12.6 内置 Skill 清单
+### 12.6 四格式自动检测与转换
+
+远程安装时，`_detect_skill_format()` 从文件内容和 URL 推断格式：
+
+| 格式 | 特征 | 转换动作 |
+|---|---|---|
+| **native** | YAML frontmatter 包含 `name` + `description`，有 `{args}` 占位符 | 直接使用 |
+| **claude-code** | frontmatter 含 `description` 但无 `name`，或含 `globs` / `alwaysAllow` 等 Claude Code 字段 | 提取 slug 做 name，追加 `{args}` |
+| **aas** | frontmatter 含 `risk` / `source_repo` / `source_type` 等 awesome-ai-agents 字段 | 映射字段、追加 `{args}` |
+| **cursorrules** | URL 含 `.cursorrules` / `.mdc`，或纯文本无 frontmatter | 自动生成 frontmatter + 追加 `{args}` |
+
+**决策**：检测基于元数据字段启发式匹配，转换后统一为 native 格式。外部 skill 缺少 `{args}` 占位符时自动追加 `"\n用户需求: {args}\n"`。
+
+**理由**：skill 生态碎片化——不同社区用不同格式发布 prompt。让安装命令一键兼容四种格式，比要求用户手动转换更实际。启发式检测偶尔误判的代价很低（最坏情况是 frontmatter 字段不全，用户手动改一下），而正确检测的收益很大（零摩擦安装）。
+
+### 12.7 `use_skill` 工具：skill 激活的显式化
+
+**问题**：skill 的自动触发对用户不可见——模型在 system prompt 中看到 skill 目录和触发条件后，直接按 skill 模板执行工作流，但 UI 上没有任何痕迹表明"此刻正在使用 frontend skill"。用户无法确认模型是否真的激活了 skill，也无法在演示视频中展示 skill 系统的运作。
+
+**决策**：新增 `use_skill(name)` 工具（`agent/tools/control.py`）。system prompt 指示模型：**当请求匹配 skill 触发条件时，第一步先调用 `use_skill` 工具激活 skill**，然后按返回的工作流执行。
+
+```python
+@tool
+def use_skill(name: str) -> ToolResult:
+    skill = get_skill(name)
+    if skill.auto_approve:
+        set_auto_approve(True)
+    workflow = skill.prompt_template.replace("{args}", "(见用户原始请求)")
+    return ToolResult(True, f"⚡ Skill [{skill.name}] activated — ...")
+```
+
+UI 层为 `use_skill` 配了专属 spinner 标签 `"⚡ activating skill"`，执行时用户能看到明确的激活动画。
+
+**被拒绝的替代方案**：在 loop 层拦截 system prompt 注入结果，自动打印激活信息。
+
+**理由**：loop 层不知道模型**是否真的在用 skill**——它只知道 skill 目录被注入了 system prompt，但模型可能忽略了触发条件。让模型**通过 tool call 显式声明**"我正在激活 skill X"，把决策权留在模型侧（它判断是否匹配），同时把可见性交给 tool dispatch 的标准渲染管线。这复用了已有的工具展示机制，不需要新增 UI 路径。
+
+每轮 loop 开始时 `set_auto_approve(False)` 重置（`loop.py`），防止上一轮 skill 的自动审批泄漏到非 skill 对话。
+
+### 12.8 内置 Skill 清单
 
 11 个内置 skill 覆盖常见开发工作流：
 
@@ -596,7 +672,45 @@ YAML frontmatter + Markdown body。`{args}` 和 `{workspace}` 是运行时替换
 
 ---
 
-## 14. 关键默认值
+## 14. 目标模式与方案模式（`goal.py`）
+
+### 14.1 目标模式（`/goal`）
+
+**决策**：`GoalManager` 实现自主迭代——用户设定目标后，agent 连续执行直到完成，无需每步等待用户输入。
+
+核心控制流：
+1. 用户输入 `/goal <描述>` → `GoalManager.set_goal()`
+2. 首轮注入 `build_initial_prompt()`（含目标 + 自主执行指令）
+3. 每轮结束后 `should_auto_continue()` 判定：
+   - `fatal_error` / `context_exhausted` → 停止
+   - `max_iterations` → agent 仍在忙，继续
+   - `natural_stop` → 检测 agent 回复是否表示完成（正则匹配中英文完成指示词）
+4. 若需继续，注入 `build_continue_prompt()` 自动发起下一轮
+5. 安全上限 `max_auto_turns = 20`
+
+**完成检测**：`_looks_like_done()` 用 6 条正则（中英文各 3 条）检测 agent 是否声称完成，如"全部完成"、"任务完成"、"all done"。**阈值为 1**——任意一条命中即认为完成。
+
+**理由**：误判"未完成为已完成"的代价只是用户多输入一句"继续"；而误判"已完成为未完成"会白白多跑一轮、产生多余输出。宁可早停。
+
+### 14.2 方案模式（`/plan`）
+
+**决策**：`PlanManager` 实现先规划后执行——agent 在规划阶段**只读**，产出实现方案后等用户审批再执行。
+
+状态机：`idle → planning → awaiting_approval → executing → idle`
+
+- **规划阶段**：prompt 明确禁止写操作（`write_file`/`edit_file`/`bash` 写命令），只允许 `read_file`/`glob`/`grep`/`list_dir` 等只读工具。
+- **审批阶段**：弹出 `interactive_confirm()` 三选一（§8.3）：
+  - **执行方案** → `PlanManager.approve()` → 注入执行 prompt
+  - **提修改意见** → 用户输入反馈 → 重新进入规划
+  - **取消方案** → `PlanManager.reject()` → 回到普通对话
+
+**被拒绝的替代方案**：用 system prompt 角色切换（"现在你是审查者 / 现在你是执行者"）。
+
+**理由**：角色切换是不可靠的软约束——模型可能在"审查者"阶段就开始写文件。方案模式的约束在两层执行：prompt 层告诉模型不要写，而状态机在 loop 层控制流程走向。方案确认的 UI 统一使用 `interactive_confirm()`（§8.3），与权限门保持操作体验一致。
+
+---
+
+## 15. 关键默认值
 
 可直接落进 `config.py`：
 
@@ -616,7 +730,7 @@ estimator               CJK 1.0/字，其余 len/3.6，每消息 +4，SAFETY_FAC
 
 ---
 
-## 15. 施工顺序（5.5 天）
+## 16. 施工顺序（5.5 天）
 
 原则：**每一步都产出可提交、可演示的增量**。评委会读提交历史了解开发过程，因此历史应当反映真实的推进顺序，而不是最后一次性倒进去。
 
@@ -638,7 +752,7 @@ D1 当天录备份 demo 同理——一个功能少但确实能跑的演示视�
 
 ---
 
-## 16. 高风险项与对策
+## 17. 高风险项与对策
 
 **1. compaction 破坏 tool_call/tool_result 配对**
 最可能真正炸掉演示的一项，三种破法见 §5.4。
@@ -658,11 +772,11 @@ D1 当天录备份 demo 同理——一个功能少但确实能跑的演示视�
 
 **4.5（半个）scope creep 吃掉交付物**
 5.5 天硬时钟，而完整版有 8 个工具 + 压缩 + 子代理。
-对策：D1 vertical slice + §15 的裁剪顺序 + D5 中午硬冻结。**三项提交物里有两项不是代码**，必须预留半天。
+对策：D1 vertical slice + §16 的裁剪顺序 + D5 中午硬冻结。**三项提交物里有两项不是代码**，必须预留半天。
 
 ---
 
-## 17. 答辩时最该主动讲的七句话
+## 18. 答辩时最该主动讲的十句话
 
 1. **compaction 的真正驱动力不是 1M 窗口装不下，而是 history 每步被完整重发使单轮成本呈 O(n²)**；顺带还有延迟与中段召回衰减。所以换成大窗口模型也不能省。
 2. **我不需要 tokenizer，我需要一个偏高估的估算器加上服务端自己给的 `usage`。** 一次调用之后它就被校准到该 provider 的真实分词行为，而 400 `context_length_exceeded` 是兜底而不是失败。
@@ -671,3 +785,6 @@ D1 当天录备份 demo 同理——一个功能少但确实能跑的演示视�
 5. **对 shell 字符串做静态分类不是安全边界，是防误操作的护栏**；真正的边界在 OS 层，所以 `ShellRunner` 留了 `Sandbox` 接缝，并且 agent 始终跑在 git-clean 的 scratch workspace 上。
 6. **Skill 不是插件——它不引入新能力，只提供高质量的起始 prompt**。自动审批用 thread-local + finally 保证既不泄漏也不丢失，与 `seal_pending_tool_calls` 是同一个安全模式。远程安装只是把 URL 转成本地 `.md` 文件——skill 引擎不区分来源，它只认格式。
 7. **终端方向键问题的根因是 Python 的 I/O 缓冲层与 OS fd 的断层**——`sys.stdin.read(1)` 一次读走了完整的 `\033[A` 三字节，`select()` 检查 OS fd 时已经空了。修复是全程用 `os.read(fd)` 绕过 Python 缓冲，这不是"换个 API"，而是理解了两层缓冲的存在。
+8. **`use_skill` 让 skill 激活对用户可见**——模型通过 tool call 显式声明"我正在用某个 skill"，复用已有的工具渲染管线，不需要新增 UI 路径。自动审批用 thread-local + finally + 每轮重置三层保证不泄漏。
+9. **目标模式的完成检测宁可早停也不多跑**——误判"已完成为未完成"会白白多跑一轮产生多余输出；误判"未完成为已完成"用户只需多输入一句"继续"。不对称的代价决定了阈值为 1。
+10. **方案模式的约束在两层执行**——prompt 层告诉模型不要写文件，状态机在 loop 层控制流程走向。单靠 prompt 是软约束，模型可能在"规划"阶段就开始写文件；状态机保证即使 prompt 失效，用户审批前写操作不会被自动放行。
