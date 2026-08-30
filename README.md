@@ -138,6 +138,17 @@ Skill 是预定义的工作流模板，执行时自动审批工具调用，无�
 
 自定义 skill 存放在 `~/.megumin/skills/`，支持 `.md`（YAML frontmatter）和 `.yaml` 两种格式。
 
+## Windows 用户
+
+本项目依赖 Linux/macOS 终端 API，**无法直接在 Windows 原生环境运行**。Windows 用户请通过 WSL2 运行——零代码改动、完整功能。
+
+详见 **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**，包含：
+- WSL2 安装与配置（一条命令）
+- Windows Terminal 推荐设置
+- 项目安装与运行
+- 演示视频录制方案（OBS / Game Bar / asciinema）
+- 常见问题排查
+
 ## 运行测试
 
 ```bash
