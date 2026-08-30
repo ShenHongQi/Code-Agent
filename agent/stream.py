@@ -61,9 +61,7 @@ class StreamAccumulator:
 
     def to_message(self) -> dict[str, Any]:
         """流结束后，构造完整的 assistant 消息。"""
-        msg: dict[str, Any] = {"role": "assistant"}
-        if self.content:
-            msg["content"] = self.content
+        msg: dict[str, Any] = {"role": "assistant", "content": self.content or ""}
 
         if self.tool_calls:
             calls = []

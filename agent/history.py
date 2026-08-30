@@ -14,9 +14,7 @@ def make_user(content: str) -> dict[str, Any]:
 
 
 def make_assistant(content: str | None = None, tool_calls: list | None = None) -> dict[str, Any]:
-    msg: dict[str, Any] = {"role": "assistant"}
-    if content is not None:
-        msg["content"] = content
+    msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
     if tool_calls:
         msg["tool_calls"] = tool_calls
     return msg
